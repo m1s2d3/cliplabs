@@ -69,7 +69,7 @@ MIGRATIONS = {
         "description": "TEXT",
         "hashtags": "TEXT",
         "caption_style": "TEXT NOT NULL DEFAULT 'classic'",
-        "crop_mode": "TEXT NOT NULL DEFAULT 'auto'",
+        "crop_mode": "TEXT NOT NULL DEFAULT 'center'",
         "crop_x": "REAL",
         "aspect": "TEXT NOT NULL DEFAULT '9:16'",
     },
@@ -195,7 +195,7 @@ def is_cancel_requested(project_id: str) -> bool:
 def insert_clip(project_id: str, fields: dict) -> dict:
     stamp = now()
     data = {
-        "hook": None, "reason": None, "captions_enabled": True, "caption_style": "classic", "crop_mode": "auto", "aspect": "9:16",
+        "hook": None, "reason": None, "captions_enabled": True, "caption_style": "classic", "crop_mode": "center", "aspect": "9:16",
         **fields,
         "id": new_id(), "project_id": project_id, "status": fields.get("status", "queued"), "created_at": stamp, "updated_at": stamp,
     }

@@ -197,7 +197,7 @@ def _run_cut(project_id: str, source: Path, meta: dict, folder: Path, report: Re
     title = f"{make_title(project['title'], 40).rstrip('…')} · {clock(start)}–{clock(end)}"
     clip = db.insert_clip(project_id, _clip_fields(
         start, end, words, options, idx=0, title=title, reason="Manual cut", score=0,
-        crop_mode="auto" if options.get("aspect") != "original" else "center", description=project["title"], hashtags=[],
+        crop_mode="center", description=project["title"], hashtags=[],
     ))
     if not _render_all(project_id, [clip], report):
         raise PipelineError(db.get_clip(clip["id"])["error"] or "Rendering failed")

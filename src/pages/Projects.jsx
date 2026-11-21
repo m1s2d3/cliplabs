@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
+import ConfirmModal from '../components/ConfirmModal';
 import { MODE_LABELS, STATUS_LABELS } from '../constants';
 import { formatDuration, navigate, timeAgo, TERMINAL } from '../utils';
 
@@ -55,9 +56,16 @@ export default function Projects({ notify }) {
     return (projects || []).filter((p) => matchesFilter(p, filter) && (mode === 'all' || p.mode === mode) && (!needle || `${p.title} ${p.channel || ''}`.toLowerCase().includes(needle)));
   }, [projects, query, filter, mode]);
 
+  const [deleting, setDeleting] = useState(null);
+
   const remove = async (event, project) => {
     event.stopPropagation();
-    if (!window.confirm(`Delete "${project.title}" and all of its clips?`)) return;
+    setDeleting(project);
+  };
+
+  const confirmRemove = async () => {
+    const project = deleting;
+    setDeleting(null);
     try {
       await api.deleteProject(project.id);
       setProjects((list) => list.filter((p) => p.id !== project.id));
@@ -70,8 +78,7 @@ export default function Projects({ notify }) {
   return (
     <main className="page">
       <div className="page-head">
-        <div><p className="kicker">YOUR WORKSPACE</p><h1>Projects</h1></div>
-        <button className="get-clips" onClick={() => navigate('/')}>New project <b>↗</b></button>
+        <div><h1>Projects</h1></div>
       </div>
       {error && <div className="notice error">{error}. Make sure the backend is running (<code>npm run backend</code>).</div>}
       {projects === null && !error && <div className="empty">Loading projects…</div>}
@@ -112,6 +119,14 @@ export default function Projects({ notify }) {
             </article>
           ))}
         </div>
+      )}
+      {deleting && (
+        <ConfirmModal
+          title="Delete project"
+          message={`Delete "${deleting.title}" and all of its clips?`}
+          onConfirm={confirmRemove}
+          onCancel={() => setDeleting(null)}
+        />
       )}
     </main>
   );

@@ -25,7 +25,7 @@ export default function DownloadResult({ project }) {
           <div><dt>Size</dt><dd>{formatBytes(project.output_size)}</dd></div>
           {!audio && <div><dt>Quality</dt><dd>{project.options.quality === 'best' ? 'Best' : `${project.options.quality}p max`}</dd></div>}
         </dl>
-        <a className="get-clips" href={api.fileUrl(project.id)} download>Download {audio ? 'audio' : 'video'} <b>↓</b></a>
+        <a className="btn primary" href={api.fileUrl(project.id)} download>Download {audio ? 'audio' : 'video'} ↓</a>
       </div>
     </section>
   );

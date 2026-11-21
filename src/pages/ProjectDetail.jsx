@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import ClipCard from '../components/ClipCard';
 import ClipEditor from '../components/ClipEditor';
+import ConfirmModal from '../components/ConfirmModal';
 import DownloadResult from '../components/DownloadResult';
 import PlayerModal from '../components/PlayerModal';
 import ProgressCard from '../components/ProgressCard';
@@ -19,8 +20,8 @@ export default function ProjectDetail({ id, notify }) {
   const [project, setProject] = useState(null);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState(null);
+  const [deleting, setDeleting] = useState(null);
   const [playing, setPlaying] = useState(null);
-  const [selected, setSelected] = useState(() => new Set());
   const [sort, setSort] = useState('score');
   const [analysis, setAnalysis] = useState(null);
 
@@ -100,7 +101,6 @@ export default function ProjectDetail({ id, notify }) {
   const retry = async () => {
     const result = await run(() => api.retryProject(project.id), 'Trying again');
     if (result) {
-      setSelected(new Set());
       setProject(result);
     }
   };
@@ -109,20 +109,16 @@ export default function ProjectDetail({ id, notify }) {
     if (copy) setProject((p) => ({ ...p, clips: [...p.clips, copy] }));
   };
   const remove = async (clip) => {
-    if (!window.confirm(`Delete "${clip.title}"?`)) return;
+    setDeleting(clip);
+  };
+  const confirmRemove = async () => {
+    const clip = deleting;
+    setDeleting(null);
     const ok = await run(() => api.deleteClip(clip.id).then(() => true), 'Clip deleted');
     if (ok) {
       setProject((p) => ({ ...p, clips: p.clips.filter((c) => c.id !== clip.id) }));
-      setSelected((s) => new Set([...s].filter((x) => x !== clip.id)));
     }
   };
-  const toggle = (clipId) => setSelected((s) => {
-    const next = new Set(s);
-    if (next.has(clipId)) next.delete(clipId);
-    else next.add(clipId);
-    return next;
-  });
-  const allSelected = readyClips.length > 0 && readyClips.every((clip) => selected.has(clip.id));
   const playIndex = playing ? readyClips.findIndex((clip) => clip.id === playing) : -1;
   const language = LANGUAGES.find(([key]) => key === project.language)?.[1] || project.language;
   const took = project.finished_at && project.started_at ? clock(elapsedSeconds(project.started_at, project.finished_at)) : null;
@@ -133,9 +129,9 @@ export default function ProjectDetail({ id, notify }) {
     <main className="page">
       <div className="page-head">
         <div className="head-with-thumb">
+          <a className="icon-button back-icon" href="#/projects" aria-label="Back to all projects" title="Back to all projects">‹</a>
           {project.thumbnail && <img className="head-thumb" src={api.url(project.thumbnail)} alt="" referrerPolicy="no-referrer" />}
           <div>
-            <a className="back-link" href="#/projects">← All projects</a>
             <h1 className="project-title">{project.title}</h1>
             <p className="project-meta">
               <span className="mode-badge">{MODE_LABELS[project.mode]}</span>
@@ -165,22 +161,14 @@ export default function ProjectDetail({ id, notify }) {
       {project.mode !== 'download' && project.clips.length > 0 && (
         <section>
           {project.mode === 'clips' && <SourceTimeline duration={project.duration} clips={project.clips} waveform={analysis?.waveform} range={range} onOpen={setPlaying} />}
-          {analysis && analysis.reliable === false && project.mode === 'clips' && (
-            <p className="notice subtle">The speech in this video was hard to transcribe (music or an unexpected language), so titles use the video name. For songs, try the <b>Music</b> content type; for speech, pick the language under Advanced options.</p>
-          )}
           <div className="clips-toolbar">
             <h2>{project.status === 'done' ? `${readyClips.length} ${project.mode === 'cut' ? 'cut' : 'clips'} ready` : 'Your clips'}</h2>
             <div className="toolbar-actions">
               {project.clips.length > 1 && (
                 <label className="sort">Sort<select value={sort} onChange={(e) => setSort(e.target.value)}>{Object.entries(SORTS).map(([key, value]) => <option key={key} value={key}>{value.label}</option>)}</select></label>
               )}
-              {readyClips.length > 1 && (
-                <button className="btn" onClick={() => setSelected(allSelected ? new Set() : new Set(readyClips.map((c) => c.id)))}>{allSelected ? 'Clear selection' : 'Select all'}</button>
-              )}
               {readyClips.length > 0 && (
-                <a className="btn primary" href={api.zipUrl(project.id, [...selected])} download>
-                  {selected.size ? `Download ${selected.size} as ZIP` : 'Download all (ZIP)'}
-                </a>
+                <a className="btn primary" href={api.zipUrl(project.id)} download>Download All</a>
               )}
             </div>
           </div>
@@ -191,8 +179,6 @@ export default function ProjectDetail({ id, notify }) {
                 clip={clip}
                 project={project}
                 rank={rankById.get(clip.id)}
-                selected={selected.has(clip.id)}
-                onSelect={() => toggle(clip.id)}
                 onOpen={() => setPlaying(clip.id)}
                 onEdit={() => setEditing(clip)}
                 onDuplicate={() => duplicate(clip)}
@@ -216,6 +202,14 @@ export default function ProjectDetail({ id, notify }) {
         />
       )}
       {editing && <ClipEditor clip={editing} project={project} analysis={analysis} onClose={() => setEditing(null)} onSaved={onSaved} notify={notify} />}
+      {deleting && (
+        <ConfirmModal
+          title="Delete clip"
+          message={`Delete "${deleting.title}"?`}
+          onConfirm={confirmRemove}
+          onCancel={() => setDeleting(null)}
+        />
+      )}
     </main>
   );
 }

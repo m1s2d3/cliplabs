@@ -20,12 +20,30 @@ export default function PlayerModal({ clips, index, project, onClose, onNavigate
 
   useEffect(() => {
     setSilent(false);
+    const el = video.current;
+    if (!el) return undefined;
+
+    el.muted = false;
+    el.volume = 1;
+    const startAudio = () => {
+      el.muted = false;
+      el.volume = 1;
+      el.play().catch(() => {});
+    };
+
+    el.addEventListener('loadedmetadata', startAudio, { once: true });
+    el.addEventListener('canplay', startAudio, { once: true });
+
     // Some embedded Chromium builds (e.g. VS Code's browser) can't decode AAC; detect it instead of looking broken.
     const timer = window.setTimeout(() => {
-      const el = video.current;
       if (el && !el.paused && !el.muted && el.currentTime > 1 && el.webkitAudioDecodedByteCount === 0) setSilent(true);
     }, 2500);
-    return () => window.clearTimeout(timer);
+
+    return () => {
+      window.clearTimeout(timer);
+      el.removeEventListener('loadedmetadata', startAudio);
+      el.removeEventListener('canplay', startAudio);
+    };
   }, [clip?.id]);
 
   if (!clip) return null;

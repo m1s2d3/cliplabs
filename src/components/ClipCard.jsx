@@ -7,7 +7,7 @@ export function aspectRatio(clip, project) {
   return clip.aspect.replace(':', ' / ');
 }
 
-export default function ClipCard({ clip, project, rank, selected, onSelect, onOpen, onEdit, onDuplicate, onDelete, canEdit }) {
+export default function ClipCard({ clip, project, rank, onOpen, onEdit, onDuplicate, onDelete, canEdit }) {
   const video = useRef(null);
   const busy = clip.status === 'queued' || clip.status === 'rendering';
   const ready = clip.status === 'ready' && clip.video_url;
@@ -24,7 +24,7 @@ export default function ClipCard({ clip, project, rank, selected, onSelect, onOp
   };
 
   return (
-    <article className={`clip-card ${selected ? 'selected' : ''}`}>
+    <article className="clip-card">
       <div
         className="clip-video"
         style={{ aspectRatio: aspectRatio(clip, project) }}
@@ -47,22 +47,14 @@ export default function ClipCard({ clip, project, rank, selected, onSelect, onOp
             {clip.status === 'failed' && <div className="spinner-wrap error">{clip.error === 'Cancelled' ? 'Cancelled' : 'Render failed'}</div>}
           </div>
         )}
-        {ready && (
-          <label className="select-box" onClick={(e) => e.stopPropagation()} title="Select for ZIP download">
-            <input type="checkbox" checked={selected} onChange={onSelect} aria-label={`Select ${clip.title}`} />
-          </label>
-        )}
         {project.mode === 'clips' && <span className="rank">#{rank}</span>}
         {project.mode === 'clips' && <span className="score" title="Virality score">{Math.round(clip.score)}</span>}
       </div>
       <div className="clip-body">
-        <h3>{clip.title}</h3>
-        {clip.reason && <p className="clip-reason">{clip.reason}</p>}
-        {clip.score_breakdown && <MiniBreakdown breakdown={clip.score_breakdown} />}
         <p className="clip-time">{formatTime(clip.start)} – {formatTime(clip.end)} · {Math.round(clip.duration)}s · {clip.aspect === 'original' ? 'Original' : clip.aspect}</p>
         {clip.status === 'failed' && clip.error && clip.error !== 'Cancelled' && <p className="clip-error">{clip.error}</p>}
         <div className="clip-actions">
-          {ready ? <a className="btn primary" href={api.downloadUrl(clip.id)} download>Download ↓</a> : <span className="btn disabled">Download ↓</span>}
+          {ready ? <a className="btn primary clip-download-icon" href={api.downloadUrl(clip.id)} download aria-label="Download clip" title="Download clip">↓</a> : <span className="btn disabled clip-download-icon" aria-label="Download unavailable">↓</span>}
           <button className="btn" onClick={onEdit} disabled={!canEdit || busy}>Edit</button>
           <button className="btn icon" onClick={onDuplicate} disabled={!ready} title="Duplicate clip" aria-label="Duplicate clip">⧉</button>
           <button className="btn icon" onClick={onDelete} disabled={busy} title="Delete clip" aria-label="Delete clip">🗑</button>

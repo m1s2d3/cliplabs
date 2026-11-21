@@ -56,7 +56,7 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
   const [captionsEnabled, setCaptionsEnabled] = useState(clip.captions_enabled);
   const [captionStyle, setCaptionStyle] = useState(clip.caption_style || 'classic');
   const [aspect, setAspect] = useState(clip.aspect || '9:16');
-  const [cropMode, setCropMode] = useState(clip.crop_mode || 'auto');
+  const [cropMode, setCropMode] = useState(clip.crop_mode || 'center');
   const [cropX, setCropX] = useState(clip.crop_x ?? 0.5);
   const originalLines = useMemo(() => clip.captions.map((g) => ({ start: g.start, end: g.end, text: g.words.map((w) => w.word).join(' ') })), [clip]);
   const [lines, setLines] = useState(originalLines);

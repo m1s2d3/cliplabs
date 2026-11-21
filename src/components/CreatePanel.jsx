@@ -330,6 +330,16 @@ export default function CreatePanel({ notify, health }) {
             <div className="control-checks">
               <label className="check"><input type="checkbox" checked={autoReframe} onChange={(e) => setCurrentAspect(e.target.checked ? '9:16' : 'original')} disabled={busy} />Auto Reframe</label>
             </div>
+            {mode === 'clips' && (
+              <label className="control-box select">
+                <span>Analyze range</span>
+                <div className="range-inline">
+                  <input type="text" placeholder="0:00" value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} disabled={busy} />
+                  <span>to</span>
+                  <input type="text" placeholder={totalDuration ? clock(totalDuration) : 'end'} value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} disabled={busy} />
+                </div>
+              </label>
+            )}
           </>
         ) : (
           <div className="download-controls-inline">
