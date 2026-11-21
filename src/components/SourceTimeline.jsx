@@ -1,3 +1,4 @@
+import React from 'react';
 import { clock } from '../utils';
 import Waveform from './Waveform';
 

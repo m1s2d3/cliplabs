@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { MODE_LABELS, STATUS_LABELS } from '../constants';
 import { formatDuration, navigate, timeAgo, TERMINAL } from '../utils';

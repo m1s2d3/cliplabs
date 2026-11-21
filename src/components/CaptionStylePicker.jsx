@@ -1,3 +1,4 @@
+import React from 'react';
 import { CAPTION_STYLES } from '../constants';
 
 export default function CaptionStylePicker({ value, onChange, disabled }) {

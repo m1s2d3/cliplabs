@@ -20,4 +20,5 @@ export default defineConfig({
   plugins: [react(), stampServiceWorker()],
   server: { port: 4173, proxy },
   preview: { port: 4173, proxy },
+  esbuild: { jsx: 'automatic' },
 });

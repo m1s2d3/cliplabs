@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 import Landing from './pages/Landing';
 import ProjectDetail from './pages/ProjectDetail';

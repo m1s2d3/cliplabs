@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { ASPECTS, CROP_MODES } from '../constants';
 import { formatTime } from '../utils';

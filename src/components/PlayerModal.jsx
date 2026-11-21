@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { formatTime } from '../utils';
 import { aspectRatio, Breakdown } from './ClipCard';

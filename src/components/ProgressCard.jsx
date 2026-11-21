@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { clock, elapsedSeconds, estimateRemaining } from '../utils';
 
 function stagesFor(project) {
