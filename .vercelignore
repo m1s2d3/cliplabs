@@ -1,7 +1,6 @@
 # Backend can't run on Vercel (ffmpeg/whisper/opencv). Deploy only the frontend.
 backend/
 node_modules/
-dist/
 .venv/
 **/__pycache__/
 *.log
