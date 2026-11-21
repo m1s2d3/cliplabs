@@ -12,5 +12,6 @@
     "test:backend": "cd backend && DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest -q"
   },
   "dependencies": { "@vitejs/plugin-react": "^5.0.4", "vite": "^7.2.2", "react": "^19.2.0", "react-dom": "^19.2.0" },
-  "devDependencies": {}
+  "devDependencies": {},
+  "engines": { "node": "22.x" }
 }
