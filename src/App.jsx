@@ -12,6 +12,7 @@ function parseRoute() {
   const match = path.match(/^\/projects\/([a-f0-9]{32})$/);
   if (match) return { name: 'project', id: match[1] };
   if (path === '/projects') return { name: 'projects' };
+  if (path === '/download') return { name: 'download' };
   return { name: 'home' };
 }
 
@@ -69,7 +70,7 @@ export default function App() {
   }, [toast]);
 
   const notify = useCallback((message, tone = 'info') => setToast({ message, tone, id: Date.now() }), []);
-  const onHome = route.name === 'home';
+  const onHome = route.name === 'home' || route.name === 'download';
 
   return (
     <div className="app-shell">
@@ -84,7 +85,8 @@ export default function App() {
         <aside className="sidebar">
           <a className="logo" href="#/"><span className="logo-icon">✦</span>Clip<span>Labs</span></a>
           <p className="side-section">Workflows</p>
-          <a className={`side-link ${onHome ? 'current' : ''}`} href="#/"><span aria-hidden="true">✦</span>Create</a>
+          <a className={`side-link ${route.name === 'home' ? 'current' : ''}`} href="#/"><span aria-hidden="true">✦</span>Create</a>
+          <a className={`side-link ${route.name === 'download' ? 'current' : ''}`} href="#/download"><span aria-hidden="true">↓</span>Downloader</a>
           <a className={`side-link ${!onHome ? 'current' : ''}`} href="#/projects"><span aria-hidden="true">▤</span>Projects</a>
           <QueuePanel queue={queue} />
         </aside>
@@ -93,13 +95,14 @@ export default function App() {
             <a className="logo" href="#/"><span className="logo-icon">✦</span>clip<span>labs</span></a>
           </div>
           <QueuePanel queue={queue} mobile />
-          {onHome && <Landing notify={notify} health={health} />}
+          {onHome && <Landing key={route.name} notify={notify} health={health} initialMode={route.name === 'download' ? 'download' : 'clips'} />}
           {route.name === 'projects' && <Projects notify={notify} />}
           {route.name === 'project' && <ProjectDetail key={route.id} id={route.id} notify={notify} />}
         </div>
       </div>
       <nav className="tabbar" aria-label="Main">
         <a className={onHome ? 'current' : ''} href="#/"><span aria-hidden="true">✦</span>Create</a>
+        <a className={route.name === 'download' ? 'current' : ''} href="#/download"><span aria-hidden="true">↓</span>Downloader</a>
         <a className={!onHome ? 'current' : ''} href="#/projects"><span aria-hidden="true">▤</span>Projects</a>
       </nav>
       <div className={`toast ${toast ? 'show' : ''} ${toast?.tone === 'error' ? 'error' : ''}`} role="status">{toast?.message}</div>

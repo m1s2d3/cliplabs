@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
-import { ASPECTS, CROP_MODES } from '../constants';
+import { ASPECTS } from '../constants';
 import { formatTime } from '../utils';
 import CaptionStylePicker from './CaptionStylePicker';
 import Waveform from './Waveform';
@@ -10,6 +10,37 @@ const MAX_SECONDS = 180;
 const round = (value) => Math.round(value * 10) / 10;
 const clamp = (value, lo, hi) => Math.min(hi, Math.max(lo, value));
 const RATIOS = { '9:16': 9 / 16, '1:1': 1, '16:9': 16 / 9 };
+const OUTPUT_SIZES = { '9:16': [1080, 1920], '1:1': [1080, 1080], '16:9': [1920, 1080] };
+const MULTI_BOX_MODES = ['split', 'split_flip', 'split3', 'pip', 'blur_fill', 'side_by_side'];
+const LAYOUT_PRESETS = [
+  { id: 'face-game', label: 'Face + gameplay', detail: 'Camera above the action', mode: 'split', icon: 'stack-top' },
+  { id: 'game-face', label: 'Gameplay + face', detail: 'Camera below the action', mode: 'split_flip', icon: 'stack-bottom' },
+  { id: 'blur', label: 'Blurred fill', detail: 'Keep the complete source', mode: 'blur_fill', icon: 'blur' },
+  { id: 'fill', label: 'Fill screen', detail: 'Full-frame centre crop', mode: 'center', icon: 'full' },
+  { id: 'game-only', label: 'Gameplay only', detail: 'Crop to the selected area', mode: 'manual', icon: 'full' },
+  { id: 'camera-tl', label: 'Camera top-left', detail: 'Square facecam overlay', mode: 'pip', position: 'top_left', shape: 'square', icon: 'pip-tl' },
+  { id: 'camera-tr', label: 'Camera top-right', detail: 'Square facecam overlay', mode: 'pip', position: 'top_right', shape: 'square', icon: 'pip-tr' },
+  { id: 'camera-bl', label: 'Camera bottom-left', detail: 'Square facecam overlay', mode: 'pip', position: 'bottom_left', shape: 'square', icon: 'pip-bl' },
+  { id: 'camera-br', label: 'Camera bottom-right', detail: 'Square facecam overlay', mode: 'pip', position: 'bottom_right', shape: 'square', icon: 'pip-br' },
+  { id: 'circle', label: 'Circle camera', detail: 'Round facecam overlay', mode: 'pip', position: 'bottom_right', shape: 'circle', icon: 'circle' },
+  { id: 'side', label: 'Side by side', detail: 'Camera and gameplay columns', mode: 'side_by_side', icon: 'columns' },
+];
+
+function cropSize(srcW, srcH, aspectRatio, zoom = 1) {
+  let w, h;
+  if (srcW / srcH > aspectRatio) [w, h] = [Math.min(srcW, Math.round(srcH * aspectRatio / 2) * 2), srcH];
+  else [w, h] = [srcW, Math.min(srcH, Math.round(srcW / aspectRatio / 2) * 2)];
+  const z = Math.max(0.3, Math.min(1, zoom));
+  if (z < 1) [w, h] = [Math.max(2, Math.round(w * z / 2) * 2), Math.max(2, Math.round(h * z / 2) * 2)];
+  return [w, h];
+}
+
+/** Mirrors backend reframe.plan_band/static_band: a crop window sized to an outW x bandH band, positioned by posFrac (0=left, 1=right). */
+function bandBox(srcW, srcH, outW, bandH, posFrac, zoom = 1, yFrac = 0.5) {
+  const [w, h] = cropSize(srcW, srcH, outW / bandH, zoom);
+  const maxLeft = Math.max(0, srcW - w);
+  return { left: (maxLeft * (posFrac ?? 0.5)) / srcW, top: (Math.max(0, srcH - h) * yFrac) / srcH, width: w / srcW, height: h / srcH };
+}
 const STYLE_POSITION = { classic: 70, highlight: 70, karaoke: 72, minimal: 82, bold: 62 };
 const STYLE_SCALE = { classic: 0.074, highlight: 0.07, karaoke: 0.07, minimal: 0.052, bold: 0.088 };
 
@@ -57,15 +88,27 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
   const [captionStyle, setCaptionStyle] = useState(clip.caption_style || 'classic');
   const [aspect, setAspect] = useState(clip.aspect || '9:16');
   const [cropMode, setCropMode] = useState(clip.crop_mode || 'center');
-  const [cropX, setCropX] = useState(clip.crop_x ?? 0.5);
+  const [cropX, setCropX] = useState(clip.crop_x ?? null);
+  const [cropX2, setCropX2] = useState(clip.crop_x2 ?? 0.5);
+  const [cropY, setCropY] = useState(clip.crop_y ?? 0.5);
+  const [cropY2, setCropY2] = useState(clip.crop_y2 ?? 0.5);
+  const [cropZoom, setCropZoom] = useState(clip.crop_zoom ?? 1);
+  const [cropZoom2, setCropZoom2] = useState(clip.crop_zoom2 ?? 1);
+  const [pipPosition, setPipPosition] = useState(clip.pip_position || 'bottom_right');
+  const [pipShape, setPipShape] = useState(clip.pip_shape || 'circle');
+  const [hookEnabled, setHookEnabled] = useState(Boolean(clip.hook_enabled));
+  const [hookText, setHookText] = useState(clip.hook || clip.title || '');
+  const [hookDuration, setHookDuration] = useState(clip.hook_duration ?? 8);
   const originalLines = useMemo(() => clip.captions.map((g) => ({ start: g.start, end: g.end, text: g.words.map((w) => w.word).join(' ') })), [clip]);
   const [lines, setLines] = useState(originalLines);
   const [saving, setSaving] = useState(false);
   const [current, setCurrent] = useState(clip.start);
   const [playing, setPlaying] = useState(false);
   const [selection, setSelection] = useState(null);
+  const [draggingFrame, setDraggingFrame] = useState(false);
   const transcriptRef = useRef(null);
   const video = useRef(null);
+  const frameDrag = useRef(null);
   const previewing = useRef(false);
   const duration = project.duration || clip.end;
 
@@ -76,9 +119,38 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
   const words = useMemo(() => (analysis?.segments || []).flatMap((s) => s.words || []), [analysis]);
   const trimChanged = Math.abs(start - round(clip.start)) > 0.05 || Math.abs(end - round(clip.end)) > 0.05;
   const captionsChanged = lines.some((line, i) => line.text !== originalLines[i]?.text);
-  const frameChanged = aspect !== clip.aspect || cropMode !== clip.crop_mode || (cropMode === 'manual' && cropX !== clip.crop_x);
+  const DUAL_SLIDER_MODES = ['split', 'split_flip', 'split3', 'side_by_side'];
+  const ZOOM_MODES = ['manual', 'split', 'split_flip', 'split3', 'pip'];
+  const frameChanged = aspect !== clip.aspect || cropMode !== clip.crop_mode
+    || pipPosition !== (clip.pip_position || 'bottom_right') || pipShape !== (clip.pip_shape || 'circle')
+    || (cropMode === 'manual' && (cropX !== clip.crop_x || cropY !== clip.crop_y || cropZoom !== clip.crop_zoom))
+    || (DUAL_SLIDER_MODES.includes(cropMode) && (cropX !== clip.crop_x || cropX2 !== clip.crop_x2 || cropY !== clip.crop_y || cropY2 !== clip.crop_y2 || cropZoom !== clip.crop_zoom || cropZoom2 !== clip.crop_zoom2))
+    || (cropMode === 'pip' && (cropX !== clip.crop_x || cropX2 !== clip.crop_x2 || cropY !== clip.crop_y || cropY2 !== clip.crop_y2 || cropZoom !== clip.crop_zoom || cropZoom2 !== clip.crop_zoom2));
   const styleChanged = captionStyle !== clip.caption_style || captionsEnabled !== clip.captions_enabled;
-  const needsRender = trimChanged || captionsChanged || frameChanged || styleChanged;
+  const hookChanged = hookEnabled !== Boolean(clip.hook_enabled)
+    || hookDuration !== (clip.hook_duration ?? 8)
+    || hookText !== (clip.hook || clip.title || '');
+  const needsRender = trimChanged || captionsChanged || frameChanged || styleChanged || hookChanged;
+  const selectedLayout = LAYOUT_PRESETS.find((item) => item.mode === cropMode
+    && (item.mode !== 'pip' || (item.position === pipPosition && item.shape === pipShape)));
+  const aspectGroup = aspect === '9:16' ? 'vertical' : aspect === '16:9' ? 'wide' : aspect === '1:1' ? 'square' : 'original';
+  const availableLayouts = LAYOUT_PRESETS.filter((layout) => {
+    if (aspectGroup === 'vertical') return layout.mode !== 'side_by_side';
+    if (aspectGroup === 'wide') return !['split', 'split_flip'].includes(layout.mode);
+    return true;
+  });
+  const chooseLayout = (layout) => {
+    setCropMode(layout.mode);
+    if (layout.position) setPipPosition(layout.position);
+    if (layout.shape) setPipShape(layout.shape);
+    if (aspect === 'original') setAspect('9:16');
+  };
+  useEffect(() => {
+    if (cropMode === 'auto' || availableLayouts.some((layout) => layout.mode === cropMode
+      && (layout.mode !== 'pip' || (layout.position === pipPosition && layout.shape === pipShape)))) return;
+    const fallback = LAYOUT_PRESETS.find((layout) => layout.id === (aspectGroup === 'wide' ? 'side' : aspectGroup === 'vertical' ? 'face-game' : 'fill'));
+    if (fallback) chooseLayout(fallback);
+  }, [aspectGroup, cropMode, pipPosition, pipShape]);
   const length = end - start;
   const rangeError = start < 0 || end > duration + 0.05 ? 'Range must be inside the source video' : length < MIN_SECONDS || length > MAX_SECONDS ? `Clips must be ${MIN_SECONDS}–${MAX_SECONDS} seconds` : '';
 
@@ -183,8 +255,16 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
     setCaptionStyle(clip.caption_style);
     setAspect(clip.aspect);
     setCropMode(clip.crop_mode);
-    setCropX(clip.crop_x ?? 0.5);
+    setCropX(clip.crop_x ?? null);
+    setCropX2(clip.crop_x2 ?? 0.5);
+    setCropZoom(clip.crop_zoom ?? 1);
+    setCropZoom2(clip.crop_zoom2 ?? 1);
+    setPipPosition(clip.pip_position || 'bottom_right');
+    setPipShape(clip.pip_shape || 'circle');
     setLines(originalLines);
+    setHookEnabled(Boolean(clip.hook_enabled));
+    setHookText(clip.hook || clip.title || '');
+    setHookDuration(clip.hook_duration ?? 8);
   };
 
   const save = async () => {
@@ -200,14 +280,65 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
     if (captionStyle !== clip.caption_style) patch.caption_style = captionStyle;
     if (aspect !== clip.aspect) patch.aspect = aspect;
     if (cropMode !== clip.crop_mode) patch.crop_mode = cropMode;
-    if (cropMode === 'manual' && cropX !== clip.crop_x) patch.crop_x = cropX;
+    if (cropMode === 'manual') {
+      if (cropX !== clip.crop_x) patch.crop_x = cropX;
+      if (cropY !== clip.crop_y) patch.crop_y = cropY;
+      if (cropZoom !== clip.crop_zoom) patch.crop_zoom = cropZoom;
+    }
+    if (DUAL_SLIDER_MODES.includes(cropMode)) {
+      if (cropX !== clip.crop_x) patch.crop_x = cropX;
+      if (cropX2 !== clip.crop_x2) patch.crop_x2 = cropX2;
+      if (cropY !== clip.crop_y) patch.crop_y = cropY;
+      if (cropY2 !== clip.crop_y2) patch.crop_y2 = cropY2;
+      if (cropZoom !== clip.crop_zoom) patch.crop_zoom = cropZoom;
+      if (cropZoom2 !== clip.crop_zoom2) patch.crop_zoom2 = cropZoom2;
+    }
+    if (cropMode === 'pip') {
+      if (cropX !== clip.crop_x) patch.crop_x = cropX;
+      if (cropX2 !== clip.crop_x2) patch.crop_x2 = cropX2;
+      if (cropY !== clip.crop_y) patch.crop_y = cropY;
+      if (cropY2 !== clip.crop_y2) patch.crop_y2 = cropY2;
+      if (cropZoom !== clip.crop_zoom) patch.crop_zoom = cropZoom;
+      if (cropZoom2 !== clip.crop_zoom2) patch.crop_zoom2 = cropZoom2;
+    }
+    if (pipPosition !== (clip.pip_position || 'bottom_right')) patch.pip_position = pipPosition;
+    if (pipShape !== (clip.pip_shape || 'circle')) patch.pip_shape = pipShape;
+    if (hookEnabled !== Boolean(clip.hook_enabled)) patch.hook_enabled = hookEnabled;
+    if (Math.abs(hookDuration - (clip.hook_duration ?? 8)) > 0.01) patch.hook_duration = hookDuration;
+    if (hookText.trim() !== (clip.hook || clip.title || '').trim()) patch.hook = hookText.trim();
     if (!Object.keys(patch).length) {
       onClose();
       return;
     }
     setSaving(true);
     try {
-      onSaved(await api.updateClip(clip.id, patch));
+      const updatedClip = await api.updateClip(clip.id, patch);
+      onSaved(updatedClip);
+    } catch (err) {
+      notify(err.message, 'error');
+      setSaving(false);
+    }
+  };
+
+  const applyFrameToOthers = async () => {
+    const frame = {
+      aspect,
+      crop_mode: cropMode,
+      crop_x: cropX,
+      crop_x2: cropX2,
+      crop_y: cropY,
+      crop_y2: cropY2,
+      crop_zoom: cropZoom,
+      crop_zoom2: cropZoom2,
+      pip_position: pipPosition,
+      pip_shape: pipShape,
+    };
+    setSaving(true);
+    try {
+      const updatedClip = await api.updateClip(clip.id, frame);
+      const result = await api.applyFrameToOthers(project.id, clip.id, frame);
+      onSaved(updatedClip, result.clips);
+      notify(result.count ? `Layout queued for ${result.count} other clips` : 'No other ready clips to update');
     } catch (err) {
       notify(err.message, 'error');
       setSaving(false);
@@ -235,6 +366,11 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
                 aspect={aspect}
                 cropMode={cropMode}
                 cropX={cropX}
+                cropX2={cropX2}
+                cropY={cropY}
+                cropY2={cropY2}
+                cropZoom={cropZoom}
+                cropZoom2={cropZoom2}
                 captionStyle={captionStyle}
                 groups={previewGroups}
                 current={current}
@@ -244,6 +380,47 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
                 onPlay={() => setPlaying(true)}
                 onPause={() => setPlaying(false)}
                 onTime={(t) => !playing && setCurrent(t)}
+                hookEnabled={hookEnabled}
+                hookText={hookText}
+                hookDuration={hookDuration}
+                onFrameDragStart={(event, index, box) => {
+                  if (cropMode === 'blur_fill' || (cropMode === 'split3' && index === 1)) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  if (cropMode === 'center' || cropMode === 'auto') setCropMode('manual');
+                  const second = index === 1;
+                  frameDrag.current = {
+                    index, resizing: Boolean(event.target.closest('.crop-resize-handle')),
+                    startX: event.clientX, startY: event.clientY,
+                    width: box.width, height: box.height,
+                    initialX: second ? cropX2 : cropX ?? 0.5,
+                    initialY: second ? cropY2 : cropY,
+                    initialZoom: second ? cropZoom2 : cropZoom,
+                  };
+                  setDraggingFrame(true);
+                }}
+                onFrameDrag={(event) => {
+                  if (!frameDrag.current) return;
+                  const drag = frameDrag.current;
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  const dx = (event.clientX - drag.startX) / bounds.width;
+                  const dy = (event.clientY - drag.startY) / bounds.height;
+                  const second = drag.index === 1;
+                  if (drag.resizing) {
+                    const scale = Math.max(0.35, 1 + Math.max(dx / Math.max(drag.width, 0.05), dy / Math.max(drag.height, 0.05)));
+                    const zoom = clamp(drag.initialZoom * scale, 0.3, 1);
+                    if (second) setCropZoom2(zoom);
+                    else setCropZoom(zoom);
+                  } else {
+                    const nextX = clamp(drag.initialX + dx / Math.max(0.01, 1 - drag.width), 0, 1);
+                    const nextY = clamp(drag.initialY + dy / Math.max(0.01, 1 - drag.height), 0, 1);
+                    if (second) { setCropX2(nextX); setCropY2(nextY); }
+                    else { setCropX(nextX); setCropY(nextY); }
+                  }
+                }}
+                onFrameDragEnd={() => { frameDrag.current = null; setDraggingFrame(false); }}
+                draggingFrame={draggingFrame}
               />
             ) : (
               <div className="empty">Source video is no longer available.</div>
@@ -258,7 +435,7 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
 
           <div className="editor-fields">
             <div className="editor-tabs" role="tablist">
-              {[['trim', 'Trim'], ['captions', 'Captions'], ['frame', 'Frame']].map(([key, label]) => (
+              {[['trim', 'Trim'], ['captions', 'Captions'], ['frame', 'Frame'], ['hook', 'Hook']].map(([key, label]) => (
                 <button key={key} role="tab" aria-selected={tab === key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>
               ))}
             </div>
@@ -315,24 +492,51 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
 
             {tab === 'frame' && (
               <div className="tab-body">
-                <label className="field">Format
+                <label className="field">Output shape
                   <select value={aspect} onChange={(e) => setAspect(e.target.value)}>
-                    {ASPECTS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-                    <option value="original">Original</option>
+                    {ASPECTS.map(([key]) => <option key={key} value={key}>{key === '9:16' ? 'Vertical · 9:16' : key === '1:1' ? 'Square · 1:1' : 'Wide · 16:9'}</option>)}
+                    <option value="original">Original ratio</option>
                   </select>
                 </label>
                 <div className="field">
-                  <span>Framing</span>
-                  <div className="segmented wrap">
-                    {CROP_MODES.map(([key, label]) => <button key={key} type="button" className={cropMode === key ? 'active' : ''} onClick={() => setCropMode(key)} disabled={aspect === 'original'}>{label}</button>)}
+                  <span>{aspectGroup === 'original' ? 'Layouts' : `${aspectGroup[0].toUpperCase()}${aspectGroup.slice(1)} layouts`}</span>
+                  <div className="layout-presets">
+                    {availableLayouts.map((layout) => (
+                      <button key={layout.id} type="button" className={`layout-preset${selectedLayout?.id === layout.id ? ' active' : ''}`} onClick={() => chooseLayout(layout)}>
+                        <span className={`layout-diagram ${layout.icon}`} aria-hidden="true"><i /><b /></span>
+                        <strong>{layout.label}</strong>
+                        <small>{layout.detail}</small>
+                      </button>
+                    ))}
                   </div>
-                </div>
-                {cropMode === 'manual' && aspect !== 'original' && (
-                  <label className="field">Position
-                    <input type="range" min="0" max="1" step="0.01" value={cropX} onChange={(e) => setCropX(Number(e.target.value))} />
-                  </label>
+                  </div>
+                <button type="button" className="btn editor-auto-face" onClick={() => { setCropX(null); setCropMode('auto'); }}>Find facecam automatically</button>
+                {cropMode === 'pip' && aspect !== 'original' && (
+                  <>
+                    <label className="field">Camera shape
+                      <select value={pipShape} onChange={(e) => setPipShape(e.target.value)}><option value="circle">Circle</option><option value="square">Square</option></select>
+                    </label>
+                  </>
                 )}
-                <p className="hint">{aspect === 'original' ? 'Keeps the full frame.' : cropMode === 'auto' ? 'Auto follows the speaker’s face. The preview shows the centre position.' : 'The highlighted box shows exactly what will be exported.'}</p>
+
+                <p className="hint">
+                    {aspect === 'original' ? 'Keeps the full frame.'
+                      : 'Drag a crop frame to reposition it. Drag its lower-right handle to resize.'}
+                </p>
+
+              </div>
+            )}
+
+            {tab === 'hook' && (
+              <div className="tab-body">
+                <label className="check"><input type="checkbox" checked={hookEnabled} onChange={(e) => setHookEnabled(e.target.checked)} />Show opening hook</label>
+                <label className="field">Hook text
+                  <input value={hookText} maxLength={140} disabled={!hookEnabled} onChange={(e) => setHookText(e.target.value)} />
+                </label>
+                <label className="field">Display duration
+                  <input type="range" min="2" max="60" step="1" value={hookDuration} disabled={!hookEnabled} onChange={(e) => setHookDuration(Number(e.target.value))} />
+                  <span className="hint">{hookDuration} seconds</span>
+                </label>
               </div>
             )}
           </div>
@@ -342,44 +546,96 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
           <span className="spacer" />
           <button className="btn" onClick={onClose} disabled={saving}>Cancel</button>
           <button className="get-clips" onClick={save} disabled={saving || Boolean(rangeError)}>{saving ? 'Saving…' : needsRender ? 'Save & re-render' : 'Save'} <b>↗</b></button>
+          <button className="btn" onClick={applyFrameToOthers} disabled={saving || !['done', 'failed', 'cancelled'].includes(project.status) || Boolean(rangeError)} title="Apply this framing to the other ready clips in this project">Apply frame to others</button>
         </div>
       </div>
     </div>
   );
 }
 
-function PreviewStage({ project, videoRef, aspect, cropMode, cropX, captionStyle, groups, current, onToggle, onLoaded, onPlay, onPause, onTime }) {
+function PreviewStage({ project, videoRef, aspect, cropMode, cropX, cropX2, cropY, cropY2, cropZoom, cropZoom2, captionStyle, groups, current, onToggle, onLoaded, onPlay, onPause, onTime, hookEnabled, hookText, hookDuration, onFrameDragStart, onFrameDrag, onFrameDragEnd, draggingFrame }) {
   const sourceRatio = project.width && project.height ? project.width / project.height : 16 / 9;
   const ratio = aspect === 'original' ? sourceRatio : RATIOS[aspect];
+  const zoom = Math.max(0.3, Math.min(1, cropMode === 'manual' ? cropZoom ?? 1 : 1));
   const wide = sourceRatio > ratio;
-  const boxW = wide ? ratio / sourceRatio : 1;
-  const boxH = wide ? 1 : sourceRatio / ratio;
-  const position = { center: 0.5, left: 0, right: 1, manual: cropX, auto: 0.5 }[cropMode] ?? 0.5;
+  const boxW = (wide ? ratio / sourceRatio : 1) * zoom;
+  const boxH = (wide ? 1 : sourceRatio / ratio) * zoom;
+  const position = { center: 0.5, left: 0, right: 1, manual: cropX ?? 0.5, auto: 0.5 }[cropMode] ?? 0.5;
   const left = (1 - boxW) * (aspect === 'original' ? 0.5 : position);
   const group = groups.find((g, i) => current >= g.start && current < (groups[i + 1]?.start ?? g.end + 0.35));
   const activeIndex = group ? group.words.findIndex((w, i) => current >= w.start && current < (group.words[i + 1]?.start ?? Infinity)) : -1;
   const upper = captionStyle !== 'minimal';
   const fontCqw = STYLE_SCALE[captionStyle] * 100 * Math.min(1, 1 / ratio);
-  const top = (1 - boxH) / 2;
+  const top = (1 - boxH) * (cropY ?? 0.5);
   const pctOf = (value) => `${value * 100}%`;
 
+  const multiBox = MULTI_BOX_MODES.includes(cropMode) && aspect !== 'original';
+  const boxes = useMemo(() => {
+    if (!multiBox) return [];
+    const [srcW, srcH] = [project.width || 1920, project.height || 1080];
+    const [outW, outH] = OUTPUT_SIZES[aspect];
+    if (cropMode === 'split') return [
+      { ...bandBox(srcW, srcH, outW, outH / 2, cropX, cropZoom, cropY), label: 'Top · face', alt: false },
+      { ...bandBox(srcW, srcH, outW, outH / 2, cropX2, cropZoom2, cropY2), label: 'Bottom · game', alt: true },
+    ];
+    if (cropMode === 'split_flip') return [
+      { ...bandBox(srcW, srcH, outW, outH / 2, cropX2, cropZoom2, cropY2), label: 'Top · game', alt: true },
+      { ...bandBox(srcW, srcH, outW, outH / 2, cropX, cropZoom, cropY), label: 'Bottom · face', alt: false },
+    ];
+    if (cropMode === 'split3') return [
+      { ...bandBox(srcW, srcH, outW, outH / 3, cropX, cropZoom, cropY), label: 'Top · face', alt: false },
+      { ...bandBox(srcW, srcH, outW, outH / 3, 0.5), label: 'Middle', alt: true },
+      { ...bandBox(srcW, srcH, outW, outH / 3, cropX2, cropZoom2, cropY2), label: 'Bottom', alt: false },
+    ];
+    if (cropMode === 'side_by_side') return [
+      { ...bandBox(srcW, srcH, outW / 2, outH, cropX, cropZoom, cropY), label: 'Camera', alt: false },
+      { ...bandBox(srcW, srcH, outW / 2, outH, cropX2, cropZoom2, cropY2), label: 'Gameplay', alt: true },
+    ];
+    if (cropMode === 'pip') {
+      const bubble = Math.round(outW * 0.34);
+      return [
+        { ...bandBox(srcW, srcH, outW, outH, cropX ?? 0.5, cropZoom, cropY), label: 'Background', alt: false },
+        { ...bandBox(srcW, srcH, bubble, bubble, cropX2, cropZoom2, cropY2), label: 'Bubble', alt: true },
+      ];
+    }
+    if (cropMode === 'blur_fill') return [{ left: 0, top: 0, width: 1, height: 1, label: 'Full frame (blurred fill)', alt: false }];
+    return [];
+  }, [multiBox, project.width, project.height, aspect, cropMode, cropX, cropX2, cropY, cropY2, cropZoom, cropZoom2]);
+
   return (
-    <div className="preview-stage" style={{ aspectRatio: `${sourceRatio}` }}>
+    <div className={`preview-stage${draggingFrame ? ' dragging-frame' : ''}`} style={{ aspectRatio: `${sourceRatio}` }} onPointerMove={onFrameDrag} onPointerUp={onFrameDragEnd} onPointerCancel={onFrameDragEnd}>
       <video ref={videoRef} src={api.url(project.source_media_url)} preload="auto" playsInline onClick={onToggle} onLoadedMetadata={onLoaded} onPlay={onPlay} onPause={onPause} onTimeUpdate={(e) => onTime(e.currentTarget.currentTime)} />
-      <div className="crop-shade" style={{ left: 0, top: 0, bottom: 0, width: pctOf(left) }} />
-      <div className="crop-shade" style={{ right: 0, top: 0, bottom: 0, width: pctOf(1 - left - boxW) }} />
-      <div className="crop-shade" style={{ left: pctOf(left), width: pctOf(boxW), top: 0, height: pctOf(top) }} />
-      <div className="crop-shade" style={{ left: pctOf(left), width: pctOf(boxW), bottom: 0, height: pctOf(top) }} />
-      <div className="crop-box" style={{ left: pctOf(left), top: pctOf(top), width: pctOf(boxW), height: pctOf(boxH) }}>
-        {group && (
-          <div className={`live-caption cap-${captionStyle}`} style={{ top: `${STYLE_POSITION[captionStyle]}%`, fontSize: `${fontCqw}cqw` }}>
-            {group.words.map((word, index) => {
-              const on = captionStyle === 'karaoke' ? index <= activeIndex : index === activeIndex;
-              return <span key={index} className={on ? 'on' : ''}>{upper ? word.word.toUpperCase() : word.word}</span>;
-            })}
+      {hookEnabled && hookText.trim() && current >= start && current - start < hookDuration && (
+        <div className="opening-hook-preview" role="status"><span>{hookText.trim()}</span></div>
+      )}
+      {multiBox ? (
+        <>
+          <div className="crop-shade-all" />
+          {boxes.map((box, i) => (
+            <div key={i} className={`crop-box draggable${box.alt ? ' alt' : ''}`} style={{ left: pctOf(box.left), top: pctOf(box.top), width: pctOf(box.width), height: pctOf(box.height) }} onPointerDown={(event) => onFrameDragStart(event, i, box)}>
+              <span className="crop-box-label">{box.label}</span><i className="crop-resize-handle" aria-hidden="true" />
+            </div>
+          ))}
+        </>
+      ) : (
+        <>
+          <div className="crop-shade" style={{ left: 0, top: 0, bottom: 0, width: pctOf(left) }} />
+          <div className="crop-shade" style={{ right: 0, top: 0, bottom: 0, width: pctOf(1 - left - boxW) }} />
+          <div className="crop-shade" style={{ left: pctOf(left), width: pctOf(boxW), top: 0, height: pctOf(top) }} />
+          <div className="crop-shade" style={{ left: pctOf(left), width: pctOf(boxW), bottom: 0, height: pctOf(top) }} />
+          <div className={`crop-box${['manual', 'center', 'auto'].includes(cropMode) ? ' draggable' : ''}`} style={{ left: pctOf(left), top: pctOf(top), width: pctOf(boxW), height: pctOf(boxH) }} onPointerDown={['manual', 'center', 'auto'].includes(cropMode) ? (event) => onFrameDragStart(event, 0, { width: boxW }) : undefined}>
+            {['manual', 'center', 'auto'].includes(cropMode) && <i className="crop-resize-handle" aria-hidden="true" />}
+            {group && (
+              <div className={`live-caption cap-${captionStyle}`} style={{ top: `${STYLE_POSITION[captionStyle]}%`, fontSize: `${fontCqw}cqw` }}>
+                {group.words.map((word, index) => {
+                  const on = captionStyle === 'karaoke' ? index <= activeIndex : index === activeIndex;
+                  return <span key={index} className={on ? 'on' : ''}>{upper ? word.word.toUpperCase() : word.word}</span>;
+                })}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
     </div>
   );
 }

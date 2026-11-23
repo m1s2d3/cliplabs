@@ -1,4 +1,6 @@
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
@@ -77,6 +79,42 @@ def fetch_info(url: str) -> dict:
     }
 
 
+def extract_youtube_frame(url: str, timestamp: float) -> Path:
+    import yt_dlp
+
+    timestamp = max(0.0, min(float(timestamp), 6 * 60 * 60))
+    temp_dir = Path(tempfile.mkdtemp(prefix="cliplabs-frame-"))
+    output = temp_dir / "frame.jpg"
+    opts = {
+        **BASE_OPTS,
+        "format": "bestvideo[height<=720]/best[height<=720]/best",
+        "outtmpl": str(temp_dir / "source.%(ext)s"),
+        "download_ranges": yt_dlp.utils.download_range_func(None, [(timestamp, timestamp + 1)]),
+        "force_keyframes_at_cuts": True,
+        "merge_output_format": "mp4",
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
+        sources = [path for path in temp_dir.glob("source.*") if path.suffix not in {".part", ".ytdl"}]
+        if not sources:
+            raise PipelineError("Could not extract a frame from this YouTube video")
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-ss", "0", "-i", str(sources[0]), "-frames:v", "1", "-q:v", "3", str(output)],
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+        return output
+    except (PipelineError, yt_dlp.utils.DownloadError, subprocess.SubprocessError, OSError) as exc:
+        import shutil
+
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        if isinstance(exc, PipelineError):
+            raise
+        raise PipelineError(f"Could not load the YouTube scene: {_clean(exc) if isinstance(exc, Exception) else exc}") from exc
+
+
 def download_youtube(
     url: str,
     dest_dir: Path,
@@ -85,6 +123,8 @@ def download_youtube(
     kind: str = "video",
     quality: str = "1080",
     audio_format: str = "m4a",
+    range_start: float | None = None,
+    range_end: float | None = None,
 ) -> dict:
     import yt_dlp
 
@@ -116,8 +156,23 @@ def download_youtube(
             raise PipelineError(f"Could not read this YouTube video: {_clean(exc)}") from exc
         if info.get("is_live"):
             raise PipelineError("Live streams are not supported")
-        if (info.get("duration") or 0) > config.MAX_SOURCE_SECONDS:
+        if range_start is None and range_end is None and (info.get("duration") or 0) > config.MAX_SOURCE_SECONDS:
             raise PipelineError(f"Video is longer than {config.MAX_SOURCE_SECONDS // 60} minutes")
+        if range_start is not None or range_end is not None:
+            start = range_start or 0
+            end = range_end if range_end is not None else info.get("duration")
+            if end is None or end <= start:
+                raise PipelineError("The selected download range is invalid")
+            if info.get("duration") and end > info["duration"]:
+                raise PipelineError("The selected end time is past the video duration")
+            if end - start > config.MAX_SOURCE_SECONDS:
+                raise PipelineError(f"Selected range is longer than {config.MAX_SOURCE_SECONDS // 60} minutes")
+            opts["download_ranges"] = yt_dlp.utils.download_range_func(None, [(start, end)])
+            opts["force_keyframes_at_cuts"] = True
+            ydl.params.update(opts)
+            selected_duration = end - start
+        else:
+            selected_duration = info.get("duration") or 0
         state["parts"] = len(info.get("requested_formats") or [None])
         try:
             ydl.process_ie_result(info, download=True)
@@ -133,5 +188,5 @@ def download_youtube(
         "title": info.get("title") or "YouTube video",
         "channel": info.get("channel") or info.get("uploader"),
         "thumbnail": info.get("thumbnail"),
-        "duration": info.get("duration") or 0,
+        "duration": selected_duration,
     }

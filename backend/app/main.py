@@ -19,10 +19,10 @@ from starlette.background import BackgroundTask
 
 from . import config, db, jobs
 from .pipeline.captions import build_groups, retime_text
-from .pipeline.download import fetch_info, validate_youtube_url
+from .pipeline.download import extract_youtube_frame, fetch_info, validate_youtube_url
 from .pipeline.media import PipelineError, media_url, project_dir, remove_project_dir
 from .pipeline.runner import load_words
-from .schemas import MODE_OPTIONS, ClipUpdate, CreateProject
+from .schemas import MODE_OPTIONS, ClipUpdate, CreateProject, RetryOptions
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -90,6 +90,8 @@ def serialize_clip(clip: dict) -> dict:
         "project_id": clip["project_id"],
         "title": clip["title"],
         "hook": clip["hook"],
+        "hook_enabled": clip["hook_enabled"],
+        "hook_duration": clip["hook_duration"],
         "reason": clip["reason"],
         "score": clip["score"],
         "score_breakdown": clip["score_breakdown"],
@@ -103,6 +105,13 @@ def serialize_clip(clip: dict) -> dict:
         "caption_style": clip["caption_style"],
         "crop_mode": clip["crop_mode"],
         "crop_x": clip["crop_x"],
+        "crop_x2": clip["crop_x2"],
+        "crop_y": clip["crop_y"],
+        "crop_y2": clip["crop_y2"],
+        "crop_zoom": clip["crop_zoom"],
+        "crop_zoom2": clip["crop_zoom2"],
+        "pip_position": clip["pip_position"],
+        "pip_shape": clip["pip_shape"],
         "aspect": clip["aspect"],
         "status": clip["status"],
         "error": clip["error"],
@@ -195,6 +204,21 @@ def youtube_info(url: str) -> dict:
         raise HTTPException(422, str(exc)) from exc
 
 
+@app.get("/api/youtube/frame")
+def youtube_frame(url: str, time: float = 0) -> FileResponse:
+    try:
+        clean = validate_youtube_url(url)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not 0 <= time <= 6 * 60 * 60:
+        raise HTTPException(400, "Frame time is outside the supported range")
+    try:
+        frame = extract_youtube_frame(clean, time)
+    except PipelineError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return FileResponse(frame, media_type="image/jpeg", background=BackgroundTask(shutil.rmtree, frame.parent, ignore_errors=True))
+
+
 @app.get("/api/projects")
 def list_projects() -> list[dict]:
     return [serialize_project(p) for p in db.list_projects()]
@@ -275,7 +299,7 @@ def cancel_project(project_id: str) -> dict:
 
 
 @app.post("/api/projects/{project_id}/retry")
-def retry_project(project_id: str) -> dict:
+def retry_project(project_id: str, body: RetryOptions | None = None) -> dict:
     project = _get_project_or_404(project_id)
     if project["status"] not in ("failed", "cancelled"):
         raise HTTPException(409, "Only failed or cancelled projects can be retried")
@@ -284,9 +308,12 @@ def retry_project(project_id: str) -> dict:
     db.delete_clips(project_id)
     if project["output_path"]:
         Path(project["output_path"]).unlink(missing_ok=True)
+    options = dict(project["options"])
+    if body and body.content_type and project["mode"] == "clips":
+        options["content_type"] = body.content_type
     db.update_project(
         project_id, status="queued", progress=0, message="Waiting in queue", error=None,
-        cancel_requested=0, output_path=None, output_size=None, started_at=None, finished_at=None,
+        cancel_requested=0, output_path=None, output_size=None, started_at=None, finished_at=None, options=options,
     )
     jobs.submit_project(project_id)
     return serialize_project(db.get_project(project_id), [])
@@ -370,15 +397,24 @@ def update_clip(clip_id: str, body: ClipUpdate) -> dict:
         changes["captions_enabled"] = body.captions_enabled
         rerender = True
 
-    for field in ("caption_style", "crop_mode", "aspect"):
+    for field in ("caption_style", "crop_mode", "aspect", "hook_enabled", "hook_duration", "pip_position", "pip_shape"):
         value = getattr(body, field)
         if value is not None and value != clip[field]:
             changes[field] = value
             rerender = True
-    if body.crop_x is not None and body.crop_x != clip["crop_x"]:
-        changes["crop_x"] = body.crop_x
-        changes.setdefault("crop_mode", "manual")
-        rerender = True
+    for field in ("crop_x", "crop_x2", "crop_y", "crop_y2", "crop_zoom", "crop_zoom2"):
+        value = getattr(body, field)
+        if field in body.model_fields_set and value != clip[field]:
+            changes[field] = value
+            if field == "crop_x" and value is not None:
+                changes.setdefault("crop_mode", "manual")
+            rerender = True
+
+    if body.hook is not None:
+        hook = body.hook.strip()
+        if hook != clip["hook"]:
+            changes["hook"] = hook[:140] or None
+            rerender = True
 
     if rerender:
         changes["status"] = "queued"
@@ -411,8 +447,8 @@ def duplicate_clip(clip_id: str) -> dict:
     clip = _get_clip_or_404(clip_id)
     if clip["status"] != "ready":
         raise HTTPException(409, "Only ready clips can be duplicated")
-    copied = ("idx", "hook", "reason", "score", "start", "end", "captions", "captions_enabled", "score_breakdown",
-              "description", "hashtags", "caption_style", "crop_mode", "crop_x", "aspect")
+    copied = ("idx", "hook", "hook_enabled", "hook_duration", "reason", "score", "start", "end", "captions", "captions_enabled", "score_breakdown",
+              "description", "hashtags", "caption_style", "crop_mode", "crop_x", "crop_x2", "crop_zoom", "crop_zoom2", "aspect", "pip_position", "pip_shape")
     new = db.insert_clip(clip["project_id"], {**{k: clip[k] for k in copied}, "title": f"{clip['title']} (copy)"[:120], "status": "ready"})
     paths = {}
     for key, suffix in (("video_path", ".mp4"), ("thumb_path", ".jpg")):
@@ -422,3 +458,27 @@ def duplicate_clip(clip_id: str) -> dict:
             paths[key] = str(target)
     db.update_clip(new["id"], **paths)
     return serialize_clip(db.get_clip(new["id"]))
+
+
+@app.post("/api/projects/{project_id}/apply-frame")
+def apply_frame_to_project(project_id: str, source_clip_id: str, body: ClipUpdate) -> dict:
+    project = _get_project_or_404(project_id)
+    if project["status"] not in db.TERMINAL_STATUSES:
+        raise HTTPException(409, "Wait until project processing is finished")
+    source_clip = _get_clip_or_404(source_clip_id)
+    if source_clip["project_id"] != project_id:
+        raise HTTPException(400, "The source clip does not belong to this project")
+
+    allowed = ("aspect", "crop_mode", "crop_x", "crop_x2", "crop_y", "crop_y2", "crop_zoom", "crop_zoom2", "pip_position", "pip_shape")
+    frame = {key: getattr(body, key) for key in allowed if key in body.model_fields_set}
+    if not frame:
+        raise HTTPException(422, "Choose at least one framing setting")
+
+    updated = []
+    for clip in db.list_clips(project_id):
+        if clip["id"] == source_clip_id or clip["status"] != "ready":
+            continue
+        db.update_clip(clip["id"], **frame, status="queued")
+        jobs.submit_render(clip["id"])
+        updated.append(serialize_clip(db.get_clip(clip["id"])))
+    return {"clips": updated, "count": len(updated)}

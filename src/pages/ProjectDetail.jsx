@@ -38,7 +38,7 @@ export default function ProjectDetail({ id, notify }) {
     load();
   }, [load]);
 
-  const active = project ? isProcessing(project) : false;
+  const active = project ? isProcessing(project) || project.clips.some((clip) => ['queued', 'rendering'].includes(clip.status)) : false;
   useEffect(() => {
     if (!active) return undefined;
     const timer = window.setInterval(() => { if (!document.hidden) load(); }, 2000);
@@ -77,10 +77,13 @@ export default function ProjectDetail({ id, notify }) {
   const finished = TERMINAL.has(project.status);
   const updateClip = (clip) => setProject((p) => ({ ...p, clips: p.clips.map((c) => (c.id === clip.id ? clip : c)) }));
 
-  const onSaved = (clip) => {
+  const onSaved = (clip, updatedClips = []) => {
     setEditing(null);
-    updateClip(clip);
-    notify(clip.status === 'queued' ? 'Re-rendering your clip…' : 'Clip updated');
+    setProject((p) => ({ ...p, clips: p.clips.map((c) => {
+      const updated = updatedClips.find((item) => item.id === c.id);
+      return c.id === clip.id ? clip : updated || c;
+    }) }));
+    notify(updatedClips.length ? `Layout queued for ${updatedClips.length} other clips` : clip.status === 'queued' ? 'Re-rendering your clip…' : 'Clip updated');
   };
 
   const run = async (action, message) => {
@@ -98,8 +101,8 @@ export default function ProjectDetail({ id, notify }) {
     const result = await run(() => api.cancelProject(project.id), 'Cancelling…');
     if (result) setProject(result);
   };
-  const retry = async () => {
-    const result = await run(() => api.retryProject(project.id), 'Trying again');
+  const retry = async (contentType) => {
+    const result = await run(() => api.retryProject(project.id, contentType ? { content_type: contentType } : {}), contentType ? 'Retrying with Music analysis' : 'Trying again');
     if (result) {
       setProject(result);
     }
@@ -152,7 +155,9 @@ export default function ProjectDetail({ id, notify }) {
       {(project.status === 'failed' || project.status === 'cancelled') && (
         <div className={`notice ${project.status === 'failed' ? 'error' : ''}`}>
           <strong>{project.status === 'failed' ? 'Processing failed.' : 'You cancelled this project.'}</strong> {project.error}
-          <div className="notice-actions"><button className="btn primary" onClick={retry}>↻ Try again</button><a className="btn" href="#/">New project</a></div>
+          <div className="notice-actions"><button className="btn primary" onClick={() => retry()}>↻ Try again</button>
+            {project.mode === 'clips' && /no speech was detected/i.test(project.error || '') && <button className="btn" onClick={() => retry('music')}>Retry as Music</button>}
+            <a className="btn" href="#/">New project</a></div>
         </div>
       )}
 

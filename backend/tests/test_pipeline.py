@@ -1,10 +1,13 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from app.pipeline import highlights
 from app.pipeline.captions import CaptionRenderer, build_groups, font_for, retime_text
 from app.pipeline.download import _clean, validate_youtube_url
-from app.pipeline.reframe import _smooth, crop_size, output_size, plan_crop
+from app.pipeline.reframe import _smooth, crop_size, output_size, plan_area, plan_crop, plan_pip, plan_split
+from app.pipeline.runner import _clip_fields
 
 
 def words_from(text: str, start: float = 0.0, step: float = 0.35) -> list[dict]:
@@ -104,6 +107,17 @@ def test_crop_size_is_vertical():
     assert h == 1080 and w < h
 
 
+def test_pip_background_and_bubble_positions_are_independent():
+    plan = plan_pip(Path("unused"), 0, 5, 1920, 1080, "9:16", 1080, 1920, "pip", 0.1, crop_x2=0.8)
+    assert plan["background"]["lefts"][0] == pytest.approx((1920 - 608) * 0.1)
+    assert plan["bubble"]["lefts"][0] == pytest.approx((1920 - plan["bubble"]["crop_w"]) * 0.8)
+
+
+def test_vertical_crop_position_is_applied():
+    plan = plan_crop(Path("unused"), 0, 5, 1080, 1920, "16:9", "manual", 0.5, crop_y=0.8)
+    assert plan["top"] == round((1920 - plan["crop_h"]) * 0.8)
+
+
 def test_smoothing_ignores_jitter_and_fills_gaps():
     centers = [960, None, 965, 955, 962, 958, None, 961]
     camera = _smooth(centers, 1920, 608)
@@ -157,6 +171,43 @@ def test_devanagari_uses_indic_font():
 @pytest.mark.parametrize("aspect,expected", [("9:16", (1080, 1920)), ("1:1", (1080, 1080)), ("16:9", (1920, 1080)), ("original", (1920, 1080))])
 def test_output_sizes(aspect, expected):
     assert output_size(aspect, 1920, 1080) == expected
+
+
+def test_custom_output_size_is_preserved():
+    assert output_size("custom:1440x900", 1920, 1080) == (1440, 900)
+
+
+def test_custom_frame_options_become_render_aspect():
+    clip = _clip_fields(0, 10, [], {"aspect": "custom", "output_width": 1440, "output_height": 900})
+    assert clip["aspect"] == "custom:1440x900"
+
+
+def test_selected_area_is_used_for_face_and_gameplay_bands():
+    camera = (0.05, 0.1, 0.3, 0.4)
+    gameplay = (0.55, 0.2, 0.4, 0.7)
+    plan = plan_split(Path("unused"), 0, 5, 1920, 1080, 1080, 960, camera_area=camera, gameplay_area=gameplay)
+    camera_box = plan["top"]
+    gameplay_box = plan["bottom"]
+    assert camera_box["left"] >= 0.05 * 1920
+    assert camera_box["top"] >= 0.1 * 1080
+    assert gameplay_box["left"] >= 0.55 * 1920
+    assert gameplay_box["top"] >= 0.2 * 1080
+
+
+def test_plan_area_stays_inside_selected_bounds():
+    area = (0.2, 0.15, 0.55, 0.7)
+    plan = plan_area(1920, 1080, 540, 960, area)
+    assert plan["left"] >= 0.2 * 1920
+    assert plan["top"] >= 0.15 * 1080
+    assert plan["left"] + plan["crop_w"] <= 0.75 * 1920 + 1
+    assert plan["top"] + plan["crop_h"] <= 0.85 * 1080 + 1
+
+
+def test_single_crop_uses_selected_area_without_tracking():
+    area = (0.25, 0.2, 0.5, 0.6)
+    plan = plan_crop(Path("unused"), 0, 5, 1920, 1080, "9:16", area=area)
+    assert plan["lefts"][0] >= 0.25 * 1920
+    assert plan["top"] >= 0.2 * 1080
 
 
 def test_fixed_crop_modes_skip_tracking():

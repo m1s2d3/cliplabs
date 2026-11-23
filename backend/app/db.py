@@ -71,7 +71,17 @@ MIGRATIONS = {
         "caption_style": "TEXT NOT NULL DEFAULT 'classic'",
         "crop_mode": "TEXT NOT NULL DEFAULT 'center'",
         "crop_x": "REAL",
+        "crop_x2": "REAL",
+        "crop_y": "REAL",
+        "crop_y2": "REAL",
+        "crop_zoom": "REAL",
+        "crop_zoom2": "REAL",
         "aspect": "TEXT NOT NULL DEFAULT '9:16'",
+        "hook_enabled": "INTEGER NOT NULL DEFAULT 0",
+        "hook_duration": "REAL NOT NULL DEFAULT 8.0",
+        "pip_position": "TEXT NOT NULL DEFAULT 'bottom_right'",
+        "pip_shape": "TEXT NOT NULL DEFAULT 'circle'",
+        "rating": "INTEGER",
     },
 }
 
@@ -115,6 +125,8 @@ def _decode(row: sqlite3.Row | None, json_fields: set[str]) -> dict[str, Any] | 
             data[field] = json.loads(data[field])
     if "captions_enabled" in data:
         data["captions_enabled"] = bool(data["captions_enabled"])
+    if "hook_enabled" in data:
+        data["hook_enabled"] = bool(data["hook_enabled"])
     return data
 
 
@@ -195,7 +207,7 @@ def is_cancel_requested(project_id: str) -> bool:
 def insert_clip(project_id: str, fields: dict) -> dict:
     stamp = now()
     data = {
-        "hook": None, "reason": None, "captions_enabled": True, "caption_style": "classic", "crop_mode": "center", "aspect": "9:16",
+        "hook": None, "reason": None, "captions_enabled": True, "caption_style": "classic", "crop_mode": "center", "aspect": "9:16", "hook_enabled": False, "hook_duration": 8.0, "pip_position": "bottom_right", "pip_shape": "circle",
         **fields,
         "id": new_id(), "project_id": project_id, "status": fields.get("status", "queued"), "created_at": stamp, "updated_at": stamp,
     }
@@ -219,6 +231,8 @@ def delete_clips(project_id: str) -> None:
 def update_clip(clip_id: str, **fields: Any) -> None:
     if "captions_enabled" in fields:
         fields["captions_enabled"] = int(fields["captions_enabled"])
+    if "hook_enabled" in fields:
+        fields["hook_enabled"] = int(fields["hook_enabled"])
     _update("clips", clip_id, fields, CLIP_JSON_FIELDS)
 
 

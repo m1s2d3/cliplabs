@@ -60,13 +60,14 @@ const post = (path, body) => request(path, { method: 'POST', body: JSON.stringif
 export const api = {
   health: () => request('/api/health'),
   youtubeInfo: (url) => request(`/api/youtube/info?url=${encodeURIComponent(url)}`),
+  youtubeFrameUrl: (videoUrl, time) => url(`/api/youtube/frame?url=${encodeURIComponent(videoUrl)}&time=${encodeURIComponent(time)}`),
   listProjects: () => request('/api/projects'),
   getProject: (id) => request(`/api/projects/${id}`),
   getAnalysis: (id) => request(`/api/projects/${id}/analysis`),
   createProject: (url, mode, options) => post('/api/projects', { url, mode, options }),
   uploadVideo,
   cancelProject: (id) => post(`/api/projects/${id}/cancel`),
-  retryProject: (id) => post(`/api/projects/${id}/retry`),
+  retryProject: (id, options = {}) => post(`/api/projects/${id}/retry`, options),
   deleteProject: (id) => request(`/api/projects/${id}`, { method: 'DELETE' }),
   updateClip: (id, patch) => request(`/api/clips/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteClip: (id) => request(`/api/clips/${id}`, { method: 'DELETE' }),
@@ -74,5 +75,6 @@ export const api = {
   downloadUrl: (id) => url(`/api/clips/${id}/download`),
   fileUrl: (id) => url(`/api/projects/${id}/file`),
   zipUrl: (id, clipIds) => url(`/api/projects/${id}/zip${clipIds?.length ? `?clips=${clipIds.join(',')}` : ''}`),
+  applyFrameToOthers: (projectId, clipId, frame) => request(`/api/projects/${projectId}/apply-frame?source_clip_id=${encodeURIComponent(clipId)}`, { method: 'POST', body: JSON.stringify(frame) }),
   url,
 };

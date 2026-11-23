@@ -85,7 +85,12 @@ def _prepare_source(project: dict, folder: Path, report: Reporter) -> tuple[Path
     existing = Path(project["source_path"]) if project["source_path"] else None
     if project["source_type"] == "youtube" and not (existing and existing.exists()):
         report("downloading", 0, "Downloading video", force=True)
-        info = download_youtube(project["source_url"], folder, lambda f: report("downloading", f, f"Downloading video · {int(f * 100)}%"))
+        options = project["options"]
+        info = download_youtube(
+            project["source_url"], folder,
+            lambda f: report("downloading", f, f"Downloading video · {int(f * 100)}%"),
+            range_start=options.get("range_start"), range_end=options.get("range_end"),
+        )
         source = Path(info["path"])
         db.update_project(project["id"], title=info["title"][:200], channel=info["channel"], thumbnail=info["thumbnail"], source_path=str(source))
     else:
@@ -113,13 +118,20 @@ def _transcribe(wav: Path, length: float, language: str, report: Reporter, offse
 
 
 def _clip_fields(start: float, end: float, words: list[dict], options: dict, **extra) -> dict:
+    aspect = options.get("aspect", "9:16")
+    if aspect == "custom" and options.get("output_width") and options.get("output_height"):
+        aspect = f"custom:{options['output_width']}x{options['output_height']}"
     return {
         "start": round(start, 3),
         "end": round(end, 3),
         "captions": build_groups(words, start, end),
         "captions_enabled": options.get("captions", True),
         "caption_style": options.get("caption_style", "classic"),
-        "aspect": options.get("aspect", "9:16"),
+        "aspect": aspect,
+        "crop_mode": options.get("crop_mode", "auto"),
+        "crop_x": None if options.get("find_facecam", True) else 0.5,
+        "pip_position": options.get("pip_position", "bottom_right"),
+        "pip_shape": options.get("pip_shape", "circle"),
         **extra,
     }
 
@@ -139,7 +151,8 @@ def _run_clips(project_id: str, source: Path, meta: dict, folder: Path, report: 
     options = project["options"]
     music = options.get("content_type") == "music"
     duration = meta["duration"]
-    span = (min(options.get("range_start") or 0.0, duration), min(options.get("range_end") or duration, duration))
+    is_trimmed_youtube = project["source_type"] == "youtube" and (options.get("range_start") is not None or options.get("range_end") is not None)
+    span = (0.0, duration) if is_trimmed_youtube else (min(options.get("range_start") or 0.0, duration), min(options.get("range_end") or duration, duration))
     if span[1] - span[0] < options["min_length"]:
         raise PipelineError("The selected range is shorter than the minimum clip length")
     if not meta["has_audio"]:
@@ -171,6 +184,7 @@ def _run_clips(project_id: str, source: Path, meta: dict, folder: Path, report: 
         clips.append(db.insert_clip(project_id, _clip_fields(
             start, end, words, options, idx=idx, title=h["title"], hook=h.get("hook"), reason=h.get("reason"), score=h["score"],
             score_breakdown=h.get("breakdown"), description=h.get("description"), hashtags=h.get("hashtags"),
+            crop_mode=options.get("crop_mode", "split" if options.get("content_type") == "gaming" and options.get("aspect", "9:16") == "9:16" else "auto"),
         )))
     rendered = _render_all(project_id, clips, report)
     if rendered == 0:
@@ -212,6 +226,7 @@ def _run_download(project: dict, folder: Path, report: Reporter) -> str:
     info = download_youtube(
         project["source_url"], folder, lambda f: report("downloading", f, f"Downloading {noun} · {int(f * 100)}%"),
         stem="download", kind=kind, quality=options.get("quality", "1080"), audio_format=options.get("audio_format", "m4a"),
+        range_start=options.get("range_start"), range_end=options.get("range_end"),
     )
     path = Path(info["path"])
     db.update_project(
@@ -244,6 +259,19 @@ def render_clip_job(clip_id: str, on_progress: Callable[[float], None] = lambda 
             caption_style=clip["caption_style"],
             crop_mode=clip["crop_mode"],
             crop_x=clip["crop_x"],
+            crop_x2=clip["crop_x2"],
+            crop_y=clip["crop_y"],
+            crop_y2=clip["crop_y2"],
+            crop_zoom=clip["crop_zoom"],
+            crop_zoom2=clip["crop_zoom2"],
+            hook_text=clip["hook"] if clip["hook_enabled"] else None,
+            hook_duration=clip["hook_duration"],
+            resolution=project["options"].get("output_resolution", 1080),
+            output_fps=project["options"].get("frame_rate", config.OUTPUT_FPS),
+            pip_position=clip["pip_position"],
+            pip_shape=clip["pip_shape"],
+            camera_area=project["options"].get("facecam_area"),
+            gameplay_area=project["options"].get("gameplay_area"),
         )
         db.update_clip(clip_id, status="ready", video_path=str(video), thumb_path=str(thumb) if thumb.exists() else None)
         return True

@@ -39,6 +39,8 @@ export const CAPTION_STYLES = [
 
 export const CROP_MODES = [
   ['auto', 'Auto (face)'], ['center', 'Center'], ['left', 'Left'], ['right', 'Right'], ['manual', 'Manual'],
+  ['split', 'Split (face + game)'], ['split_flip', 'Split (game + face)'], ['split3', 'Triple split'],
+  ['pip', 'PiP bubble'], ['blur_fill', 'Blur fill'],
 ];
 
 export const STATUS_LABELS = {
