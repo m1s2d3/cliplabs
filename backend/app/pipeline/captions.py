@@ -99,12 +99,12 @@ def font_for(text: str, kind: str, size: int) -> ImageFont.FreeTypeFont:
 class CaptionRenderer:
     """Pre-renders caption overlays and returns the right one for any timestamp in the clip."""
 
-    def __init__(self, groups: list[dict], clip_start: float, width: int, height: int, style: str = "classic"):
+    def __init__(self, groups: list[dict], clip_start: float, width: int, height: int, style: str = "classic", position: float | None = None):
         self.width, self.height = width, height
         self.style = STYLES.get(style, STYLES["classic"])
         self.size = int(min(width, height) * self.style["scale"])
         self.stroke = max(3, int(self.size * 0.11)) if self.style["mode"] != "plain" else 0
-        self.center_y = int(height * self.style["position"])
+        self.center_y = int(height * (position if position is not None else self.style["position"]))
         self.events: list[tuple[float, float, int, int]] = []
         transform = str.upper if self.style["upper"] else str
         self.groups = [[transform(w["word"]) for w in g["words"]] for g in groups]

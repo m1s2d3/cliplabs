@@ -52,6 +52,9 @@ CREATE INDEX IF NOT EXISTS idx_clips_project ON clips(project_id);
 """
 
 # Columns added after v1; applied with ALTER TABLE so existing databases keep their data.
+# Defaults here are SQLite column fallbacks for rows written before a column existed —
+# they intentionally differ from schemas.ClipOptions' user-facing defaults, which the
+# pipeline always applies explicitly via _clip_fields() when a clip is actually created.
 MIGRATIONS = {
     "projects": {
         "mode": "TEXT NOT NULL DEFAULT 'clips'",
@@ -82,11 +85,14 @@ MIGRATIONS = {
         "pip_position": "TEXT NOT NULL DEFAULT 'bottom_right'",
         "pip_shape": "TEXT NOT NULL DEFAULT 'circle'",
         "rating": "INTEGER",
+        "caption_position": "REAL",
+        "crop_area": "TEXT",
+        "crop_area2": "TEXT",
     },
 }
 
 PROJECT_JSON_FIELDS = {"options"}
-CLIP_JSON_FIELDS = {"captions", "score_breakdown", "hashtags"}
+CLIP_JSON_FIELDS = {"captions", "score_breakdown", "hashtags", "crop_area", "crop_area2"}
 
 
 def now() -> str:
@@ -162,13 +168,14 @@ def get_project(project_id: str) -> dict | None:
     return _decode(row, PROJECT_JSON_FIELDS)
 
 
-def list_projects() -> list[dict]:
+def list_projects(limit: int = 200, offset: int = 0) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             """SELECT p.*, COUNT(c.id) AS clip_count,
                       (SELECT thumb_path FROM clips WHERE project_id = p.id AND thumb_path IS NOT NULL ORDER BY score DESC LIMIT 1) AS thumb_path
                FROM projects p LEFT JOIN clips c ON c.project_id = p.id
-               GROUP BY p.id ORDER BY p.created_at DESC"""
+               GROUP BY p.id ORDER BY p.created_at DESC LIMIT ? OFFSET ?""",
+            (limit, offset),
         ).fetchall()
     return [_decode(row, PROJECT_JSON_FIELDS) for row in rows]
 
@@ -192,10 +199,27 @@ def delete_project(project_id: str) -> None:
 
 
 def mark_interrupted() -> None:
+    """On startup, recovers clips whose render actually finished (file written, DB not yet
+    updated) before failing everything else. Safe because render_clip_job only writes to a
+    clip's final video path via an atomic rename after a fully successful encode, and the
+    409 guard in update_clip prevents a clip's settings from changing again while it renders."""
+    from .pipeline.media import project_dir
+
     message = "Interrupted by a server restart. Please try again."
     with _lock, _connect() as conn:
+        stuck_clips = conn.execute("SELECT * FROM clips WHERE status NOT IN ('ready', 'failed')").fetchall()
+        for row in stuck_clips:
+            clip = _decode(row, CLIP_JSON_FIELDS)
+            video = project_dir(clip["project_id"]) / "clips" / f"{clip['id']}.mp4"
+            if video.exists() and video.stat().st_size > 0:
+                thumb = video.with_suffix(".jpg")
+                conn.execute(
+                    "UPDATE clips SET status = 'ready', error = NULL, video_path = ?, thumb_path = ?, updated_at = ? WHERE id = ?",
+                    (str(video), str(thumb) if thumb.exists() else None, now(), clip["id"]),
+                )
+            else:
+                conn.execute("UPDATE clips SET status = 'failed', error = ?, updated_at = ? WHERE id = ?", (message, now(), clip["id"]))
         conn.execute("UPDATE projects SET status = 'failed', error = ?, updated_at = ? WHERE status NOT IN ('done', 'failed', 'cancelled')", (message, now()))
-        conn.execute("UPDATE clips SET status = 'failed', error = ?, updated_at = ? WHERE status NOT IN ('ready', 'failed')", (message, now()))
 
 
 def is_cancel_requested(project_id: str) -> bool:

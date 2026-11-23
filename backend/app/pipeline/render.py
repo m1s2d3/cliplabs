@@ -93,6 +93,7 @@ def render_clip(
     on_progress: Callable[[float], None] = lambda _: None,
     aspect: str = "9:16",
     caption_style: str = "classic",
+    caption_position: float | None = None,
     crop_mode: str = "auto",
     crop_x: float | None = None,
     crop_x2: float | None = None,
@@ -140,7 +141,7 @@ def render_clip(
         plan = plan_crop(source, start, end, src_w, src_h, aspect, crop_mode, crop_x, zoom, gameplay_area or camera_area, crop_y)
         crop_w, crop_h, top, times, lefts = plan["crop_w"], plan["crop_h"], plan["top"], plan["times"], plan["lefts"]
         out_w, out_h = output_size(aspect, crop_w, crop_h, resolution)
-    captions = CaptionRenderer(caption_groups, start, out_w, out_h, caption_style) if caption_groups else None
+    captions = CaptionRenderer(caption_groups, start, out_w, out_h, caption_style, caption_position) if caption_groups else None
 
 
 

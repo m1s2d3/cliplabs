@@ -72,6 +72,7 @@ export const api = {
   updateClip: (id, patch) => request(`/api/clips/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteClip: (id) => request(`/api/clips/${id}`, { method: 'DELETE' }),
   duplicateClip: (id) => post(`/api/clips/${id}/duplicate`),
+  retryClip: (id) => post(`/api/clips/${id}/retry`),
   downloadUrl: (id) => url(`/api/clips/${id}/download`),
   fileUrl: (id) => url(`/api/projects/${id}/file`),
   zipUrl: (id, clipIds) => url(`/api/projects/${id}/zip${clipIds?.length ? `?clips=${clipIds.join(',')}` : ''}`),

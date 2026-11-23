@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { ASPECTS, CONTENT_TYPES, LANGUAGES, LENGTHS } from '../constants';
 import { clock, isYouTubeUrl, navigate, parseTime } from '../utils';
+import CaptionStylePicker from './CaptionStylePicker';
 
 const infoCache = new Map();
 
@@ -51,6 +52,8 @@ export default function CreatePanel({ notify, health, initialMode = 'clips' }) {
 
   const [clipCount, setClipCount] = useState(5);
   const [length, setLength] = useState('auto');
+  const [captionsEnabled, setCaptionsEnabled] = useState(false);
+  const [captionStyle, setCaptionStyle] = useState('classic');
   const [language, setLanguage] = useState('auto');
   const [contentType, setContentType] = useState('talking');
   const [aspect, setAspect] = useState('9:16');
@@ -379,7 +382,8 @@ export default function CreatePanel({ notify, health, initialMode = 'clips' }) {
         frame_rate: frameRate,
         output_width: customWidth,
         output_height: customHeight,
-        captions: false,
+        captions: captionsEnabled,
+        caption_style: captionStyle,
         language,
       };
     }
@@ -388,7 +392,8 @@ export default function CreatePanel({ notify, health, initialMode = 'clips' }) {
       clip_count: clipCount,
       min_length,
       max_length,
-      captions: false,
+      captions: captionsEnabled,
+      caption_style: captionStyle,
       language,
       content_type: contentType,
       aspect,
@@ -701,6 +706,10 @@ export default function CreatePanel({ notify, health, initialMode = 'clips' }) {
             <label>Content<select value={contentType} onChange={(e) => changeContentType(e.target.value)} disabled={busy}>{CONTENT_TYPES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
             <label>Language<select title="Choose the spoken language for transcription" value={language} onChange={(e) => setLanguage(e.target.value)} disabled={busy}>{LANGUAGES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
           </div>
+          <div className="advanced-row wide caption-controls">
+            <label className="rights-check"><input type="checkbox" checked={captionsEnabled} onChange={(e) => setCaptionsEnabled(e.target.checked)} disabled={busy} />Add captions</label>
+            {captionsEnabled && <CaptionStylePicker value={captionStyle} onChange={setCaptionStyle} disabled={busy} />}
+          </div>
         </div>
         <div className="clip-settings-output-row">
         <div className="clip-settings-section clip-output-settings">
@@ -746,6 +755,10 @@ export default function CreatePanel({ notify, health, initialMode = 'clips' }) {
 
       {mode === 'cut' && <section className="studio-controls-bar">
         <label className="control-box select"><span>Output shape</span><select value={currentAspect} onChange={(e) => setCurrentAspect(e.target.value)} disabled={busy}><option value="original">Original ratio</option>{ASPECTS.map(([key]) => <option key={key} value={key}>{key}</option>)}</select></label>
+        <div className="caption-controls cut-caption-controls">
+          <label className="rights-check"><input type="checkbox" checked={captionsEnabled} onChange={(e) => setCaptionsEnabled(e.target.checked)} disabled={busy} />Add captions</label>
+          {captionsEnabled && <CaptionStylePicker value={captionStyle} onChange={setCaptionStyle} disabled={busy} />}
+        </div>
         <button className="create-clip-cta" type="submit" disabled={busy}>{buttonLabel} <span>→</span></button>
       </section>}
     </form>

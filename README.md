@@ -110,7 +110,7 @@ This workflow accepts YouTube URLs only. The backend rejects live streams.
 2. Set start and end times and choose output shape and render options.
 3. The backend makes one clip record for that interval and renders it.
 
-The current Create UI sends captions disabled for cuts and does not expose a caption toggle, even though the backend schema/pipeline can support captions when requested through the API.
+Create Clips and Manual Cut both expose an **Add captions** toggle and the same caption style picker. Captions default to off. When enabled for a cut, the backend transcribes only the selected cut interval and offsets transcript timing back to the source timeline.
 
 ### Project Library
 
@@ -141,7 +141,7 @@ The backend Pydantic models in `backend/app/schemas.py` are authoritative for ac
 | `max_length` | 10–180 seconds | 60 | Create UI length presets include Auto 20–60, Short 10–30, Medium 30–60, Long 60–90. |
 | `content_type` | `talking`, `music`, `gaming` | `talking` | Gaming uses different heuristic weights; music uses music-oriented candidate selection and bypasses the no-speech guard. |
 | `language` | `auto`, `en`, `hi`, `pa`, `ur`, `bn`, `ta`, `te`, `mr`, `gu`, `es`, `fr`, `de`, `pt`, `ar` | `auto` | `auto` and English use the configured base model; other languages use the multilingual model. |
-| `captions` | boolean | `true` | **Current Create UI sends `false`**, so generated clips start without captions in the normal UI flow; captions can be enabled in the editor. |
+| `captions` | boolean | `false` | Create Clips exposes an Add captions toggle; captions can also be enabled later in the clip editor. |
 | `caption_style` | `classic`, `highlight`, `karaoke`, `minimal`, `bold` | `classic` | Used when captions are rendered. |
 | `crop_mode` | `auto`, `center`, `left`, `right`, `manual`, `split`, `split_flip`, `split3`, `pip`, `blur_fill`, `side_by_side` | `auto` | Frontend presents friendly layout labels and sends the corresponding mode. |
 | `pip_position` | `top_left`, `top_right`, `bottom_left`, `bottom_right` | `bottom_right` | For picture-in-picture composition. |
@@ -159,7 +159,7 @@ The UI's framing default may be Fill screen/center while the schema default is `
 
 - `start >= 0`, `end > 0`; duration must be from 1 second to 10 minutes.
 - `aspect`: `original`, `9:16`, `1:1`, `16:9`, or `custom`; custom dimensions follow the even-pixel 144–4320 rule.
-- Optional caption/language/render fields exist in the schema. The current UI sends captions disabled and does not expose them.
+- The UI exposes an Add captions toggle and caption style picker. Captions default to off; when enabled, only the cut range is transcribed and word timestamps are offset to source time.
 - One output clip is generated.
 
 ### Download (`mode: "download"`)
@@ -336,7 +336,7 @@ The backend requires a persistent process, disk, FFmpeg, OpenCV, Whisper models 
 - UI copy has historically mentioned a 500 MB upload cap and AVI support, but current server defaults to 2048 MiB and rejects AVI. The server config and accepted extensions are authoritative.
 - Music mode is a fallback analyzer for sources without speech; it does not magically recover speech transcription. For gaming or ambient sources, it ranks by music/audio energy and visual-scene cues, so resulting moments may not correspond to meaningful gameplay events.
 - With fewer than five recognized words, non-music clips fail with the no-speech message. VAD can remove almost all audio for quiet, noisy, or non-speech sources.
-- The current normal Create form sends captions off despite the schema default being on. Captions can be enabled later in the clip editor.
+- Create Clips and Manual Cut captions default to off and can be enabled explicitly in the form. The Clips API schema default is also off; caption style defaults to `classic`.
 - Jobs live in in-process executors. Restarting the backend marks unfinished work failed rather than resuming it. This is a single-instance app design, not a distributed worker queue.
 - The backend stores source and output assets on disk; disk capacity and persistent-volume configuration matter, especially for large sources and repeated projects.
 - Generated outputs and models can consume substantial CPU, memory, disk, and startup/download time. The default Whisper models may be downloaded on first use.
@@ -360,3 +360,92 @@ The following prompt can be given to a coding AI to recreate the application fro
 - API and DB: `backend/app/main.py`, `backend/app/schemas.py`, `backend/app/db.py`.
 - Jobs and processing: `backend/app/jobs.py`, `backend/app/pipeline/runner.py` and the other modules under `backend/app/pipeline/`.
 - Runtime and deploy: `backend/app/config.py`, `backend/Dockerfile`, `backend/railway.toml`, `vite.config.js`, `vercel.json`.
+
+## Improvement Prompts
+
+Use this prompt catalog when planning focused improvements. Paste the Base Prompt first, then exactly one improvement prompt. Keep each improvement in a separate AI chat/task. Suggested order: **#4 → #1 → #5 → #3 → #2**; small fixes first, larger changes later. Commit completed work only after reviewing and testing it.
+
+### Base Prompt
+
+```text
+Tu ClipLabs repo pe kaam kar raha hai (React 19 + Vite 7 frontend, FastAPI + SQLite + FFmpeg/yt-dlp/faster-whisper backend). README is project ka current behavior describe karta hai.
+
+Rules:
+1. Pehle relevant files padh (backend/app/main.py, schemas.py, db.py, jobs.py, pipeline/runner.py, aur jo bhi touch hoga). Bina padhe code mat likh.
+2. Pehle chhota plan de: kaunsi files badlengi, kyun, aur kya risk hai. Mere "go" bolne ke baad hi code likh.
+3. Minimal change kar. Existing API contract, DB schema (sirf additive migration), aur UI style mat tod.
+4. Naye behavior ke liye tests likh (backend/tests/). Last mein `npm run test:backend` chala aur result bata.
+5. Jo cheez verify nahi kar paaya (live YouTube, Whisper, full render), uske baare mein saaf bol, "works" mat claim kar.
+6. Kaam ke baad README ke affected sections update kar.
+```
+
+### 1. Silent Gaming Videos
+
+```text
+Problem: no-speech guard (<5 words) sirf content_type=music pe bypass hota hai. Silent gameplay fail ho jaata hai.
+Kaam: gaming content_type ke liye no-speech guard bypass kar, aur highlights.py mein gaming ke liye audio-energy peaks + scene-change density pe based fallback scoring add kar jab transcript unreliable ho. "Retry as Music" button sirf talking ke liye rakh. Tests add kar.
+```
+
+### 2. Authentication And User Separation
+
+```text
+Problem: koi auth nahi hai, /api/projects se koi bhi sab projects dekh/delete kar sakta hai.
+Kaam: lightweight auth add kar (simple email+password ya magic link, JWT cookie). projects table mein user_id column (additive migration). Saare /api/projects* aur /api/clips* routes sirf owner ke liye. /media files ke liye signed URLs ya ownership check. Frontend mein login page aur 401 handling. Pehle plan de, kyunki ye bada change hai.
+```
+
+### 3. Resume Jobs After Restart
+
+```text
+Problem: backend restart pe unfinished projects failed ho jaate hain.
+Kaam: runner.py mein stage checkpoints add kar (source downloaded, transcript.json saved, clips created). Startup pe interrupted projects ko failed mark karne ki jagah queued kar, aur runner existing artifacts (source, transcript.json) dekh ke us stage se resume kare. Jo clips already ready hain unhe dobara render mat kar.
+```
+
+### 4. Caption UX Consistency
+
+```text
+Problem: schema default captions=true hai par Create UI false bhejta hai, aur Manual Cut mein caption toggle nahi hai.
+Kaam: CreatePanel.jsx mein Clips aur Manual Cut dono ke liye ek caption toggle + caption style picker add kar. Default ek hi rakh (UI aur schema match karein). Cut mode mein captions on hone pe transcription range ke offset ke saath chale.
+```
+
+### 5. Failed Clip Retry And Partial Failure Visibility
+
+```text
+Problem: ek clip bhi render ho jaaye toh project done dikhta hai, failed clips ka retry nahi hai.
+Kaam: ClipCard mein failed clip pe error message aur "Retry render" button add kar. Naya endpoint POST /api/clips/{id}/retry. Project detail pe "3 of 5 clips ready" jaisa summary badge dikha.
+```
+
+### 6. Queue Fairness
+
+```text
+Problem: single worker queue hai, ek lamba job baaki sab block karta hai.
+Kaam: download-only jobs ko clips/transcription queue se alag executor mein daal. Queue position UI mein dikha ("2nd in queue"). Whisper/render wale heavy jobs single rahein.
+```
+
+### 7. Disk Cleanup
+
+```text
+Problem: source media aur outputs kabhi delete nahi hote.
+Kaam: config mein RETENTION_DAYS add kar. Startup pe aur daily background task se terminal projects ke source media (clips ke alawa) purge kar. Project detail pe storage used dikha.
+```
+
+### 8. SSE Progress
+
+```text
+Problem: 3 sec polling heavy aur laggy hai.
+Kaam: GET /api/projects/{id}/events SSE endpoint add kar jo status/progress push kare. Frontend mein SSE use kar, fail hone pe polling fallback rakh.
+```
+
+### 9. Small Fixes
+
+```text
+1. UI copy mein purana "500 MB" aur "AVI" text hata, real limit 2048 MiB aur accepted extensions (.mp4 .mov .mkv .webm .m4v) dikha.
+2. /api/youtube/frame pe rate limit + short-lived cache laga.
+3. Upload resumable (chunked) banane ka plan de, abhi code mat likh.
+```
+
+### Usage Tips
+
+- Agar AI bina plan ke code likhna shuru kare, bolo: "Ruk, pehle plan de."
+- Auth jaise bade changes naye branch par karo.
+- Railway jaise cloud IPs par YouTube bot-check ya age-restriction download rok sakte hain; ise alag se test karo.
+- Ek chat mein ek improvement rakho. Har change ke tests aur README updates usi task ka hissa hon.

@@ -257,6 +257,7 @@ def render_clip_job(clip_id: str, on_progress: Callable[[float], None] = lambda 
             on_progress,
             aspect=clip["aspect"],
             caption_style=clip["caption_style"],
+            caption_position=clip["caption_position"],
             crop_mode=clip["crop_mode"],
             crop_x=clip["crop_x"],
             crop_x2=clip["crop_x2"],
@@ -270,8 +271,8 @@ def render_clip_job(clip_id: str, on_progress: Callable[[float], None] = lambda 
             output_fps=project["options"].get("frame_rate", config.OUTPUT_FPS),
             pip_position=clip["pip_position"],
             pip_shape=clip["pip_shape"],
-            camera_area=project["options"].get("facecam_area"),
-            gameplay_area=project["options"].get("gameplay_area"),
+            camera_area=clip["crop_area"] or project["options"].get("facecam_area"),
+            gameplay_area=clip["crop_area2"] or project["options"].get("gameplay_area"),
         )
         db.update_clip(clip_id, status="ready", video_path=str(video), thumb_path=str(thumb) if thumb.exists() else None)
         return True

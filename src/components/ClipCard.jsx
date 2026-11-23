@@ -7,7 +7,7 @@ export function aspectRatio(clip, project) {
   return clip.aspect.replace(':', ' / ');
 }
 
-export default function ClipCard({ clip, project, rank, onOpen, onEdit, onDuplicate, onDelete, canEdit }) {
+export default function ClipCard({ clip, project, rank, onOpen, onEdit, onDuplicate, onDelete, onRetry, canEdit }) {
   const video = useRef(null);
   const busy = clip.status === 'queued' || clip.status === 'rendering';
   const ready = clip.status === 'ready' && clip.video_url;
@@ -55,6 +55,7 @@ export default function ClipCard({ clip, project, rank, onOpen, onEdit, onDuplic
         {clip.status === 'failed' && clip.error && clip.error !== 'Cancelled' && <p className="clip-error">{clip.error}</p>}
         <div className="clip-actions">
           {ready ? <a className="btn primary clip-download-icon" href={api.downloadUrl(clip.id)} download aria-label="Download clip" title="Download clip">↓</a> : <span className="btn disabled clip-download-icon" aria-label="Download unavailable">↓</span>}
+          {clip.status === 'failed' && <button className="btn" onClick={onRetry}>Retry render</button>}
           <button className="btn" onClick={onEdit} disabled={!canEdit || busy}>Edit</button>
           <button className="btn icon" onClick={onDuplicate} disabled={!ready} title="Duplicate clip" aria-label="Duplicate clip">⧉</button>
           <button className="btn icon" onClick={onDelete} disabled={busy} title="Delete clip" aria-label="Delete clip">🗑</button>

@@ -111,6 +111,10 @@ export default function ProjectDetail({ id, notify }) {
     const copy = await run(() => api.duplicateClip(clip.id), 'Clip duplicated');
     if (copy) setProject((p) => ({ ...p, clips: [...p.clips, copy] }));
   };
+  const retryClip = async (clip) => {
+    const updated = await run(() => api.retryClip(clip.id), 'Re-rendering clip…');
+    if (updated) updateClip(updated);
+  };
   const remove = async (clip) => {
     setDeleting(clip);
   };
@@ -167,7 +171,7 @@ export default function ProjectDetail({ id, notify }) {
         <section>
           {project.mode === 'clips' && <SourceTimeline duration={project.duration} clips={project.clips} waveform={analysis?.waveform} range={range} onOpen={setPlaying} />}
           <div className="clips-toolbar">
-            <h2>{project.status === 'done' ? `${readyClips.length} ${project.mode === 'cut' ? 'cut' : 'clips'} ready` : 'Your clips'}</h2>
+            <h2>{finished ? `${readyClips.length} of ${clips.length} ${project.mode === 'cut' ? 'cut' : 'clips'} ready` : 'Your clips'}</h2>
             <div className="toolbar-actions">
               {project.clips.length > 1 && (
                 <label className="sort">Sort<select value={sort} onChange={(e) => setSort(e.target.value)}>{Object.entries(SORTS).map(([key, value]) => <option key={key} value={key}>{value.label}</option>)}</select></label>
@@ -188,6 +192,7 @@ export default function ProjectDetail({ id, notify }) {
                 onEdit={() => setEditing(clip)}
                 onDuplicate={() => duplicate(clip)}
                 onDelete={() => remove(clip)}
+                onRetry={() => retryClip(clip)}
                 canEdit={finished}
               />
             ))}

@@ -100,6 +100,14 @@ def test_caption_renderer_highlights_active_word():
     assert renderer.overlay_at(30) is None
 
 
+def test_caption_renderer_position_override_moves_the_overlay():
+    groups = build_groups(words_from("one two three four"), 0, 10)
+    default = CaptionRenderer(groups, 0, 1080, 1920, "classic")
+    moved = CaptionRenderer(groups, 0, 1080, 1920, "classic", position=0.2)
+    assert moved.center_y == int(1920 * 0.2)
+    assert moved.center_y != default.center_y
+
+
 def test_crop_size_is_vertical():
     assert crop_size(1920, 1080) == (608, 1080)
     assert crop_size(1080, 1920) == (1080, 1920)

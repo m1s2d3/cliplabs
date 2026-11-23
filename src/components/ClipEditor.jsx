@@ -12,6 +12,14 @@ const clamp = (value, lo, hi) => Math.min(hi, Math.max(lo, value));
 const RATIOS = { '9:16': 9 / 16, '1:1': 1, '16:9': 16 / 9 };
 const OUTPUT_SIZES = { '9:16': [1080, 1920], '1:1': [1080, 1080], '16:9': [1920, 1080] };
 const MULTI_BOX_MODES = ['split', 'split_flip', 'split3', 'pip', 'blur_fill', 'side_by_side'];
+const FRAME_SELECTOR_MODES = ['split', 'split_flip', 'split3', 'pip', 'side_by_side'];
+const BOX_LABELS = {
+  split: ['Top · face', 'Bottom · game'],
+  split_flip: ['Top · game', 'Bottom · face'],
+  split3: ['Top · face', 'Middle', 'Bottom'],
+  side_by_side: ['Camera', 'Gameplay'],
+  pip: ['Background', 'Bubble'],
+};
 const LAYOUT_PRESETS = [
   { id: 'face-game', label: 'Face + gameplay', detail: 'Camera above the action', mode: 'split', icon: 'stack-top' },
   { id: 'game-face', label: 'Gameplay + face', detail: 'Camera below the action', mode: 'split_flip', icon: 'stack-bottom' },
@@ -40,6 +48,15 @@ function bandBox(srcW, srcH, outW, bandH, posFrac, zoom = 1, yFrac = 0.5) {
   const [w, h] = cropSize(srcW, srcH, outW / bandH, zoom);
   const maxLeft = Math.max(0, srcW - w);
   return { left: (maxLeft * (posFrac ?? 0.5)) / srcW, top: (Math.max(0, srcH - h) * yFrac) / srcH, width: w / srcW, height: h / srcH };
+}
+
+/** A starting rectangle (normalized to the full source frame) for a newly chosen shape, mirroring CreatePanel's defaultArea. */
+function defaultSourceArea(shape, canvasRatio) {
+  const ratio = { square: 1, '9:16': 9 / 16, '16:9': 16 / 9, circle: 1 }[shape];
+  let width = shape === 'freeform' ? 0.5 : Math.min(0.62, Math.sqrt(ratio / canvasRatio) * 0.62);
+  let height = shape === 'freeform' ? 0.38 : width * canvasRatio / ratio;
+  if (height > 0.62) { height = 0.62; width = height * ratio / canvasRatio; }
+  return [(1 - width) / 2, (1 - height) / 2, width, height];
 }
 const STYLE_POSITION = { classic: 70, highlight: 70, karaoke: 72, minimal: 82, bold: 62 };
 const STYLE_SCALE = { classic: 0.074, highlight: 0.07, karaoke: 0.07, minimal: 0.052, bold: 0.088 };
@@ -86,6 +103,7 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
   const [end, setEnd] = useState(round(clip.end));
   const [captionsEnabled, setCaptionsEnabled] = useState(clip.captions_enabled);
   const [captionStyle, setCaptionStyle] = useState(clip.caption_style || 'classic');
+  const [captionPosition, setCaptionPosition] = useState(clip.caption_position ?? null);
   const [aspect, setAspect] = useState(clip.aspect || '9:16');
   const [cropMode, setCropMode] = useState(clip.crop_mode || 'center');
   const [cropX, setCropX] = useState(clip.crop_x ?? null);
@@ -96,6 +114,11 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
   const [cropZoom2, setCropZoom2] = useState(clip.crop_zoom2 ?? 1);
   const [pipPosition, setPipPosition] = useState(clip.pip_position || 'bottom_right');
   const [pipShape, setPipShape] = useState(clip.pip_shape || 'circle');
+  const [activeBoxIndex, setActiveBoxIndex] = useState(0);
+  const [shape1, setShape1] = useState(clip.crop_area ? 'freeform' : 'locked');
+  const [shape2, setShape2] = useState(clip.crop_area2 ? 'freeform' : 'locked');
+  const [cropArea, setCropArea] = useState(clip.crop_area ?? null);
+  const [cropArea2, setCropArea2] = useState(clip.crop_area2 ?? null);
   const [hookEnabled, setHookEnabled] = useState(Boolean(clip.hook_enabled));
   const [hookText, setHookText] = useState(clip.hook || clip.title || '');
   const [hookDuration, setHookDuration] = useState(clip.hook_duration ?? 8);
@@ -106,9 +129,12 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
   const [playing, setPlaying] = useState(false);
   const [selection, setSelection] = useState(null);
   const [draggingFrame, setDraggingFrame] = useState(false);
+  const [draggingCaption, setDraggingCaption] = useState(false);
   const transcriptRef = useRef(null);
   const video = useRef(null);
   const frameDrag = useRef(null);
+  const captionDrag = useRef(null);
+  const areaDrag = useRef(null);
   const previewing = useRef(false);
   const duration = project.duration || clip.end;
 
@@ -126,11 +152,12 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
     || (cropMode === 'manual' && (cropX !== clip.crop_x || cropY !== clip.crop_y || cropZoom !== clip.crop_zoom))
     || (DUAL_SLIDER_MODES.includes(cropMode) && (cropX !== clip.crop_x || cropX2 !== clip.crop_x2 || cropY !== clip.crop_y || cropY2 !== clip.crop_y2 || cropZoom !== clip.crop_zoom || cropZoom2 !== clip.crop_zoom2))
     || (cropMode === 'pip' && (cropX !== clip.crop_x || cropX2 !== clip.crop_x2 || cropY !== clip.crop_y || cropY2 !== clip.crop_y2 || cropZoom !== clip.crop_zoom || cropZoom2 !== clip.crop_zoom2));
-  const styleChanged = captionStyle !== clip.caption_style || captionsEnabled !== clip.captions_enabled;
+  const styleChanged = captionStyle !== clip.caption_style || captionsEnabled !== clip.captions_enabled || captionPosition !== (clip.caption_position ?? null);
   const hookChanged = hookEnabled !== Boolean(clip.hook_enabled)
     || hookDuration !== (clip.hook_duration ?? 8)
     || hookText !== (clip.hook || clip.title || '');
-  const needsRender = trimChanged || captionsChanged || frameChanged || styleChanged || hookChanged;
+  const areaChanged = JSON.stringify(cropArea) !== JSON.stringify(clip.crop_area ?? null) || JSON.stringify(cropArea2) !== JSON.stringify(clip.crop_area2 ?? null);
+  const needsRender = trimChanged || captionsChanged || frameChanged || areaChanged || styleChanged || hookChanged;
   const selectedLayout = LAYOUT_PRESETS.find((item) => item.mode === cropMode
     && (item.mode !== 'pip' || (item.position === pipPosition && item.shape === pipShape)));
   const aspectGroup = aspect === '9:16' ? 'vertical' : aspect === '16:9' ? 'wide' : aspect === '1:1' ? 'square' : 'original';
@@ -144,6 +171,20 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
     if (layout.position) setPipPosition(layout.position);
     if (layout.shape) setPipShape(layout.shape);
     if (aspect === 'original') setAspect('9:16');
+    setActiveBoxIndex(0);
+  };
+  const sourceRatio = project.width && project.height ? project.width / project.height : 16 / 9;
+  const secondBandIndex = (BOX_LABELS[cropMode]?.length ?? 1) - 1;
+  const chooseShape = (index, shape) => {
+    if (index === 0) {
+      setShape1(shape);
+      if (shape === 'locked') setCropArea(null);
+      else if (!cropArea) setCropArea(defaultSourceArea(shape, sourceRatio));
+    } else {
+      setShape2(shape);
+      if (shape === 'locked') setCropArea2(null);
+      else if (!cropArea2) setCropArea2(defaultSourceArea(shape, sourceRatio));
+    }
   };
   useEffect(() => {
     if (cropMode === 'auto' || availableLayouts.some((layout) => layout.mode === cropMode
@@ -253,6 +294,7 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
     setRange(clip.start, clip.end);
     setCaptionsEnabled(clip.captions_enabled);
     setCaptionStyle(clip.caption_style);
+    setCaptionPosition(clip.caption_position ?? null);
     setAspect(clip.aspect);
     setCropMode(clip.crop_mode);
     setCropX(clip.crop_x ?? null);
@@ -261,6 +303,10 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
     setCropZoom2(clip.crop_zoom2 ?? 1);
     setPipPosition(clip.pip_position || 'bottom_right');
     setPipShape(clip.pip_shape || 'circle');
+    setShape1(clip.crop_area ? 'freeform' : 'locked');
+    setShape2(clip.crop_area2 ? 'freeform' : 'locked');
+    setCropArea(clip.crop_area ?? null);
+    setCropArea2(clip.crop_area2 ?? null);
     setLines(originalLines);
     setHookEnabled(Boolean(clip.hook_enabled));
     setHookText(clip.hook || clip.title || '');
@@ -278,6 +324,7 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
     }
     if (captionsEnabled !== clip.captions_enabled) patch.captions_enabled = captionsEnabled;
     if (captionStyle !== clip.caption_style) patch.caption_style = captionStyle;
+    if (captionPosition !== (clip.caption_position ?? null)) patch.caption_position = captionPosition;
     if (aspect !== clip.aspect) patch.aspect = aspect;
     if (cropMode !== clip.crop_mode) patch.crop_mode = cropMode;
     if (cropMode === 'manual') {
@@ -303,9 +350,11 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
     }
     if (pipPosition !== (clip.pip_position || 'bottom_right')) patch.pip_position = pipPosition;
     if (pipShape !== (clip.pip_shape || 'circle')) patch.pip_shape = pipShape;
+    if (JSON.stringify(cropArea) !== JSON.stringify(clip.crop_area ?? null)) patch.crop_area = cropArea;
+    if (JSON.stringify(cropArea2) !== JSON.stringify(clip.crop_area2 ?? null)) patch.crop_area2 = cropArea2;
     if (hookEnabled !== Boolean(clip.hook_enabled)) patch.hook_enabled = hookEnabled;
     if (Math.abs(hookDuration - (clip.hook_duration ?? 8)) > 0.01) patch.hook_duration = hookDuration;
-    if (hookText.trim() !== (clip.hook || clip.title || '').trim()) patch.hook = hookText.trim();
+    if (hookText.trim() !== (clip.hook || '').trim()) patch.hook = hookText.trim();
     if (!Object.keys(patch).length) {
       onClose();
       return;
@@ -330,6 +379,8 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
       crop_y2: cropY2,
       crop_zoom: cropZoom,
       crop_zoom2: cropZoom2,
+      crop_area: cropArea,
+      crop_area2: cropArea2,
       pip_position: pipPosition,
       pip_shape: pipShape,
     };
@@ -371,10 +422,19 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
                 cropY2={cropY2}
                 cropZoom={cropZoom}
                 cropZoom2={cropZoom2}
+                shape1={shape1}
+                shape2={shape2}
+                cropArea={cropArea}
+                cropArea2={cropArea2}
+                secondBandIndex={secondBandIndex}
                 captionStyle={captionStyle}
+                captionPosition={captionPosition}
                 groups={previewGroups}
                 current={current}
+                start={start}
                 playing={playing}
+                activeBoxIndex={activeBoxIndex}
+                onSelectBox={setActiveBoxIndex}
                 onToggle={togglePlay}
                 onLoaded={() => seek(start)}
                 onPlay={() => setPlaying(true)}
@@ -383,6 +443,30 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
                 hookEnabled={hookEnabled}
                 hookText={hookText}
                 hookDuration={hookDuration}
+                draggingCaption={draggingCaption}
+                onCaptionDragStart={(event) => {
+                  const box = event.currentTarget.closest('.crop-box');
+                  if (!box) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  captionDrag.current = box.getBoundingClientRect();
+                  setDraggingCaption(true);
+                }}
+                onAreaDragStart={(event, index) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  const bounds = event.currentTarget.closest('.preview-stage').getBoundingClientRect();
+                  const rect = index === 0 ? cropArea : cropArea2;
+                  areaDrag.current = {
+                    index,
+                    resizing: Boolean(event.target.closest('.source-area-resize')),
+                    startX: (event.clientX - bounds.left) / bounds.width,
+                    startY: (event.clientY - bounds.top) / bounds.height,
+                    rect,
+                  };
+                }}
                 onFrameDragStart={(event, index, box) => {
                   if (cropMode === 'blur_fill' || (cropMode === 'split3' && index === 1)) return;
                   event.preventDefault();
@@ -401,6 +485,39 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
                   setDraggingFrame(true);
                 }}
                 onFrameDrag={(event) => {
+                  if (captionDrag.current) {
+                    const rect = captionDrag.current;
+                    setCaptionPosition(clamp((event.clientY - rect.top) / rect.height, 0.05, 0.95));
+                    return;
+                  }
+                  if (areaDrag.current) {
+                    const drag = areaDrag.current;
+                    const bounds = event.currentTarget.getBoundingClientRect();
+                    const x = (event.clientX - bounds.left) / bounds.width;
+                    const y = (event.clientY - bounds.top) / bounds.height;
+                    const shape = drag.index === 0 ? shape1 : shape2;
+                    let rect;
+                    if (drag.resizing) {
+                      if (shape === 'freeform') {
+                        const width = clamp(drag.rect[2] + (x - drag.startX), 0.06, 1 - drag.rect[0]);
+                        const height = clamp(drag.rect[3] + (y - drag.startY), 0.06, 1 - drag.rect[1]);
+                        rect = [drag.rect[0], drag.rect[1], width, height];
+                      } else {
+                        const ratio = { square: 1, '9:16': 9 / 16, '16:9': 16 / 9, circle: 1 }[shape];
+                        const normalizedRatio = ratio * (bounds.height / bounds.width);
+                        const widthDelta = x - drag.startX;
+                        const heightDeltaAsWidth = (y - drag.startY) * normalizedRatio;
+                        const proposedWidth = drag.rect[2] + (Math.abs(widthDelta) > Math.abs(heightDeltaAsWidth) ? widthDelta : heightDeltaAsWidth);
+                        const width = clamp(proposedWidth, 0.06, 1 - drag.rect[0]);
+                        rect = [drag.rect[0], drag.rect[1], width, clamp(width / normalizedRatio, 0.06, 1 - drag.rect[1])];
+                      }
+                    } else {
+                      const dx = x - drag.startX, dy = y - drag.startY;
+                      rect = [clamp(drag.rect[0] + dx, 0, 1 - drag.rect[2]), clamp(drag.rect[1] + dy, 0, 1 - drag.rect[3]), drag.rect[2], drag.rect[3]];
+                    }
+                    if (drag.index === 0) setCropArea(rect); else setCropArea2(rect);
+                    return;
+                  }
                   if (!frameDrag.current) return;
                   const drag = frameDrag.current;
                   const bounds = event.currentTarget.getBoundingClientRect();
@@ -419,7 +536,11 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
                     else { setCropX(nextX); setCropY(nextY); }
                   }
                 }}
-                onFrameDragEnd={() => { frameDrag.current = null; setDraggingFrame(false); }}
+                onFrameDragEnd={() => {
+                  if (captionDrag.current) { captionDrag.current = null; setDraggingCaption(false); return; }
+                  if (areaDrag.current) { areaDrag.current = null; return; }
+                  frameDrag.current = null; setDraggingFrame(false);
+                }}
                 draggingFrame={draggingFrame}
               />
             ) : (
@@ -474,6 +595,8 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
               <div className="tab-body">
                 <label className="check"><input type="checkbox" checked={captionsEnabled} onChange={(e) => setCaptionsEnabled(e.target.checked)} />Burn captions into the video</label>
                 <CaptionStylePicker value={captionStyle} onChange={setCaptionStyle} disabled={!captionsEnabled} />
+                <p className="hint">Drag the caption on the preview above to move it up or down.</p>
+                {captionPosition != null && <button type="button" className="btn small" onClick={() => setCaptionPosition(null)} disabled={!captionsEnabled}>Reset to style default</button>}
                 {trimChanged ? (
                   <p className="hint">Captions will be regenerated from the transcript for the new range.</p>
                 ) : (
@@ -500,7 +623,7 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
                 </label>
                 <div className="field">
                   <span>{aspectGroup === 'original' ? 'Layouts' : `${aspectGroup[0].toUpperCase()}${aspectGroup.slice(1)} layouts`}</span>
-                  <div className="layout-presets">
+                  <div className="layout-presets create-layout-presets">
                     {availableLayouts.map((layout) => (
                       <button key={layout.id} type="button" className={`layout-preset${selectedLayout?.id === layout.id ? ' active' : ''}`} onClick={() => chooseLayout(layout)}>
                         <span className={`layout-diagram ${layout.icon}`} aria-hidden="true"><i /><b /></span>
@@ -510,14 +633,48 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
                     ))}
                   </div>
                   </div>
-                <button type="button" className="btn editor-auto-face" onClick={() => { setCropX(null); setCropMode('auto'); }}>Find facecam automatically</button>
-                {cropMode === 'pip' && aspect !== 'original' && (
-                  <>
-                    <label className="field">Camera shape
-                      <select value={pipShape} onChange={(e) => setPipShape(e.target.value)}><option value="circle">Circle</option><option value="square">Square</option></select>
-                    </label>
-                  </>
+                {FRAME_SELECTOR_MODES.includes(cropMode) && aspect !== 'original' && (
+                  <div className="source-frame-tools">
+                    <div className="source-frame-tools-title">
+                      <strong>Frame selector</strong>
+                      <small>Choose a frame, then drag it on the preview to move or resize it.</small>
+                    </div>
+                    <div className="source-frame-tool-buttons">
+                      {BOX_LABELS[cropMode].map((label, i) => (
+                        <button key={label} type="button" className={`btn${activeBoxIndex === i ? ' primary' : ''}`} onClick={() => setActiveBoxIndex(i)} aria-pressed={activeBoxIndex === i}>
+                          <span className={`area-swatch ${i % 2 ? 'gameplay' : ''}`} />{label}
+                        </button>
+                      ))}
+                    </div>
+                    {cropMode === 'pip' && activeBoxIndex === 1 && (
+                      <div className="area-shape-options" role="radiogroup" aria-label="Bubble shape">
+                        {['circle', 'square'].map((shape) => (
+                          <label key={shape} className={pipShape === shape ? 'active' : ''}>
+                            <input type="radio" name="pip-bubble-shape" value={shape} checked={pipShape === shape} onChange={() => setPipShape(shape)} />
+                            {shape === 'circle' ? 'Circle' : 'Square'}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    {(activeBoxIndex === 0 || activeBoxIndex === secondBandIndex) && (
+                      <>
+                        <small className="hint">Resize shape · locked follows the drag handle; a shape lets you draw an exact source area.</small>
+                        <div className="area-shape-options" role="radiogroup" aria-label="Resize shape">
+                          {(cropMode === 'pip' && activeBoxIndex === 1 ? ['locked', 'circle', 'square', 'freeform'] : ['locked', 'square', '9:16', '16:9', 'freeform']).map((shape) => {
+                            const current = activeBoxIndex === 0 ? shape1 : shape2;
+                            return (
+                              <label key={shape} className={current === shape ? 'active' : ''}>
+                                <input type="radio" name={`resize-shape-${activeBoxIndex}`} value={shape} checked={current === shape} onChange={() => chooseShape(activeBoxIndex, shape)} />
+                                {shape === 'locked' ? 'Locked' : shape === 'freeform' ? 'Freeform' : shape === 'circle' ? 'Circle' : shape === 'square' ? 'Square' : shape}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </div>
                 )}
+                <button type="button" className="btn editor-auto-face" onClick={() => { setCropX(null); setCropMode('auto'); }}>Find facecam automatically</button>
 
                 <p className="hint">
                     {aspect === 'original' ? 'Keeps the full frame.'
@@ -553,7 +710,7 @@ export default function ClipEditor({ clip, project, analysis: initialAnalysis, o
   );
 }
 
-function PreviewStage({ project, videoRef, aspect, cropMode, cropX, cropX2, cropY, cropY2, cropZoom, cropZoom2, captionStyle, groups, current, onToggle, onLoaded, onPlay, onPause, onTime, hookEnabled, hookText, hookDuration, onFrameDragStart, onFrameDrag, onFrameDragEnd, draggingFrame }) {
+function PreviewStage({ project, videoRef, aspect, cropMode, cropX, cropX2, cropY, cropY2, cropZoom, cropZoom2, shape1, shape2, cropArea, cropArea2, secondBandIndex, captionStyle, captionPosition, groups, current, start, onToggle, onLoaded, onPlay, onPause, onTime, hookEnabled, hookText, hookDuration, onFrameDragStart, onFrameDrag, onFrameDragEnd, draggingFrame, onCaptionDragStart, draggingCaption, onAreaDragStart, activeBoxIndex, onSelectBox }) {
   const sourceRatio = project.width && project.height ? project.width / project.height : 16 / 9;
   const ratio = aspect === 'original' ? sourceRatio : RATIOS[aspect];
   const zoom = Math.max(0.3, Math.min(1, cropMode === 'manual' ? cropZoom ?? 1 : 1));
@@ -566,6 +723,7 @@ function PreviewStage({ project, videoRef, aspect, cropMode, cropX, cropX2, crop
   const activeIndex = group ? group.words.findIndex((w, i) => current >= w.start && current < (group.words[i + 1]?.start ?? Infinity)) : -1;
   const upper = captionStyle !== 'minimal';
   const fontCqw = STYLE_SCALE[captionStyle] * 100 * Math.min(1, 1 / ratio);
+  const captionTopPct = captionPosition != null ? captionPosition * 100 : STYLE_POSITION[captionStyle];
   const top = (1 - boxH) * (cropY ?? 0.5);
   const pctOf = (value) => `${value * 100}%`;
 
@@ -575,27 +733,27 @@ function PreviewStage({ project, videoRef, aspect, cropMode, cropX, cropX2, crop
     const [srcW, srcH] = [project.width || 1920, project.height || 1080];
     const [outW, outH] = OUTPUT_SIZES[aspect];
     if (cropMode === 'split') return [
-      { ...bandBox(srcW, srcH, outW, outH / 2, cropX, cropZoom, cropY), label: 'Top · face', alt: false },
-      { ...bandBox(srcW, srcH, outW, outH / 2, cropX2, cropZoom2, cropY2), label: 'Bottom · game', alt: true },
+      { ...bandBox(srcW, srcH, outW, outH / 2, cropX, cropZoom, cropY), label: BOX_LABELS.split[0], alt: false },
+      { ...bandBox(srcW, srcH, outW, outH / 2, cropX2, cropZoom2, cropY2), label: BOX_LABELS.split[1], alt: true },
     ];
     if (cropMode === 'split_flip') return [
-      { ...bandBox(srcW, srcH, outW, outH / 2, cropX2, cropZoom2, cropY2), label: 'Top · game', alt: true },
-      { ...bandBox(srcW, srcH, outW, outH / 2, cropX, cropZoom, cropY), label: 'Bottom · face', alt: false },
+      { ...bandBox(srcW, srcH, outW, outH / 2, cropX2, cropZoom2, cropY2), label: BOX_LABELS.split_flip[0], alt: true },
+      { ...bandBox(srcW, srcH, outW, outH / 2, cropX, cropZoom, cropY), label: BOX_LABELS.split_flip[1], alt: false },
     ];
     if (cropMode === 'split3') return [
-      { ...bandBox(srcW, srcH, outW, outH / 3, cropX, cropZoom, cropY), label: 'Top · face', alt: false },
-      { ...bandBox(srcW, srcH, outW, outH / 3, 0.5), label: 'Middle', alt: true },
-      { ...bandBox(srcW, srcH, outW, outH / 3, cropX2, cropZoom2, cropY2), label: 'Bottom', alt: false },
+      { ...bandBox(srcW, srcH, outW, outH / 3, cropX, cropZoom, cropY), label: BOX_LABELS.split3[0], alt: false },
+      { ...bandBox(srcW, srcH, outW, outH / 3, 0.5), label: BOX_LABELS.split3[1], alt: true },
+      { ...bandBox(srcW, srcH, outW, outH / 3, cropX2, cropZoom2, cropY2), label: BOX_LABELS.split3[2], alt: false },
     ];
     if (cropMode === 'side_by_side') return [
-      { ...bandBox(srcW, srcH, outW / 2, outH, cropX, cropZoom, cropY), label: 'Camera', alt: false },
-      { ...bandBox(srcW, srcH, outW / 2, outH, cropX2, cropZoom2, cropY2), label: 'Gameplay', alt: true },
+      { ...bandBox(srcW, srcH, outW / 2, outH, cropX, cropZoom, cropY), label: BOX_LABELS.side_by_side[0], alt: false },
+      { ...bandBox(srcW, srcH, outW / 2, outH, cropX2, cropZoom2, cropY2), label: BOX_LABELS.side_by_side[1], alt: true },
     ];
     if (cropMode === 'pip') {
       const bubble = Math.round(outW * 0.34);
       return [
-        { ...bandBox(srcW, srcH, outW, outH, cropX ?? 0.5, cropZoom, cropY), label: 'Background', alt: false },
-        { ...bandBox(srcW, srcH, bubble, bubble, cropX2, cropZoom2, cropY2), label: 'Bubble', alt: true },
+        { ...bandBox(srcW, srcH, outW, outH, cropX ?? 0.5, cropZoom, cropY), label: BOX_LABELS.pip[0], alt: false },
+        { ...bandBox(srcW, srcH, bubble, bubble, cropX2, cropZoom2, cropY2), label: BOX_LABELS.pip[1], alt: true },
       ];
     }
     if (cropMode === 'blur_fill') return [{ left: 0, top: 0, width: 1, height: 1, label: 'Full frame (blurred fill)', alt: false }];
@@ -611,11 +769,22 @@ function PreviewStage({ project, videoRef, aspect, cropMode, cropX, cropX2, crop
       {multiBox ? (
         <>
           <div className="crop-shade-all" />
-          {boxes.map((box, i) => (
-            <div key={i} className={`crop-box draggable${box.alt ? ' alt' : ''}`} style={{ left: pctOf(box.left), top: pctOf(box.top), width: pctOf(box.width), height: pctOf(box.height) }} onPointerDown={(event) => onFrameDragStart(event, i, box)}>
-              <span className="crop-box-label">{box.label}</span><i className="crop-resize-handle" aria-hidden="true" />
-            </div>
-          ))}
+          {boxes.map((box, i) => {
+            const areaShape = i === 0 ? shape1 : i === secondBandIndex ? shape2 : 'locked';
+            const area = i === 0 ? cropArea : cropArea2;
+            if (areaShape !== 'locked' && area) {
+              return (
+                <div key={i} className={`source-area-box active${areaShape === 'circle' ? ' circle' : ''}${box.alt ? ' gameplay' : ''}${activeBoxIndex === i ? ' focused' : ''}`} style={{ left: pctOf(area[0]), top: pctOf(area[1]), width: pctOf(area[2]), height: pctOf(area[3]) }} onPointerDown={(event) => { onSelectBox(i); onAreaDragStart(event, i); }}>
+                  <b>{box.label}</b><i className="source-area-resize" aria-hidden="true" />
+                </div>
+              );
+            }
+            return (
+              <div key={i} className={`crop-box draggable${box.alt ? ' alt' : ''}${activeBoxIndex === i ? ' focused' : ''}`} style={{ left: pctOf(box.left), top: pctOf(box.top), width: pctOf(box.width), height: pctOf(box.height) }} onPointerDown={(event) => { onSelectBox(i); onFrameDragStart(event, i, box); }}>
+                <span className="crop-box-label">{box.label}</span><i className="crop-resize-handle" aria-hidden="true" />
+              </div>
+            );
+          })}
         </>
       ) : (
         <>
@@ -626,7 +795,11 @@ function PreviewStage({ project, videoRef, aspect, cropMode, cropX, cropX2, crop
           <div className={`crop-box${['manual', 'center', 'auto'].includes(cropMode) ? ' draggable' : ''}`} style={{ left: pctOf(left), top: pctOf(top), width: pctOf(boxW), height: pctOf(boxH) }} onPointerDown={['manual', 'center', 'auto'].includes(cropMode) ? (event) => onFrameDragStart(event, 0, { width: boxW }) : undefined}>
             {['manual', 'center', 'auto'].includes(cropMode) && <i className="crop-resize-handle" aria-hidden="true" />}
             {group && (
-              <div className={`live-caption cap-${captionStyle}`} style={{ top: `${STYLE_POSITION[captionStyle]}%`, fontSize: `${fontCqw}cqw` }}>
+              <div
+                className={`live-caption cap-${captionStyle}${draggingCaption ? ' dragging' : ''}`}
+                style={{ top: `${captionTopPct}%`, fontSize: `${fontCqw}cqw` }}
+                onPointerDown={onCaptionDragStart}
+              >
                 {group.words.map((word, index) => {
                   const on = captionStyle === 'karaoke' ? index <= activeIndex : index === activeIndex;
                   return <span key={index} className={on ? 'on' : ''}>{upper ? word.word.toUpperCase() : word.word}</span>;
